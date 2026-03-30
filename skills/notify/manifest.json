@@ -1,0 +1,19 @@
+{
+    "name": "Notify",
+    "version": "0.1.0",
+    "description": "Send notifications to the user. Desktop alerts, reminders, status updates. Use when the user needs to be alerted about something even if they're not looking at the chat.",
+    "author": "Agent OS",
+    "permissions": ["memory:read"],
+    "memory_namespaces": ["notify"],
+    "allowed_domains": [],
+    "max_tokens": 1000,
+    "timeout_seconds": 10,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true,
+    "actions": [
+        {"id": "send", "description": "Send a notification to the user"}
+    ]
+}

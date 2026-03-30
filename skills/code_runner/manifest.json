@@ -1,0 +1,19 @@
+{
+    "name": "Code Runner",
+    "version": "0.1.0",
+    "description": "Execute Python code safely in a sandbox. Calculate math, process data, run algorithms, convert units, generate outputs. Use for any computation the agent needs to perform rather than estimate or guess.",
+    "author": "Agent OS",
+    "permissions": ["memory:read", "memory:write"],
+    "memory_namespaces": ["code_runner"],
+    "max_tokens": 4000,
+    "timeout_seconds": 30,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true,
+    "actions": [
+        {"id": "calculate", "description": "Evaluate a math expression or solve a calculation from natural language"},
+        {"id": "run", "description": "Execute provided Python code and return the output"}
+    ]
+}

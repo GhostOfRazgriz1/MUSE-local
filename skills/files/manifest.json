@@ -1,0 +1,32 @@
+{
+    "name": "Files",
+    "version": "0.3.0",
+    "description": "Filesystem operations: read, write, edit, copy, move, delete files and directories. Create content, save conversation results to disk.",
+    "author": "Agent OS",
+    "permissions": ["file:read", "file:write", "memory:read", "memory:write"],
+    "memory_namespaces": ["files"],
+    "allowed_domains": [],
+    "actions": [
+        {"id": "read", "description": "Read or view file contents"},
+        {"id": "write", "description": "Create, write, or save a file (including generated content)"},
+        {"id": "edit", "description": "Find and replace text within a file"},
+        {"id": "delete", "description": "Delete a file or directory"},
+        {"id": "list", "description": "List directory contents"},
+        {"id": "tree", "description": "Show recursive directory tree"},
+        {"id": "search", "description": "Search for files by name or content"},
+        {"id": "info", "description": "Get file or directory metadata (size, dates)"},
+        {"id": "copy", "description": "Copy a file or directory"},
+        {"id": "move", "description": "Move or rename a file or directory"},
+        {"id": "mkdir", "description": "Create a new directory"},
+        {"id": "diff", "description": "Compare two files"},
+        {"id": "append", "description": "Append content to an existing file"},
+        {"id": "approve", "description": "Grant directory access to the agent"}
+    ],
+    "max_tokens": 12000,
+    "timeout_seconds": 120,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": false
+}

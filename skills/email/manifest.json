@@ -1,0 +1,26 @@
+{
+    "name": "Email",
+    "version": "0.1.0",
+    "description": "Read, search, and send emails. Check your inbox, read messages, compose and send new emails, reply to threads. Uses Gmail.",
+    "author": "Agent OS",
+    "permissions": ["email:read", "email:send", "profile:read", "memory:read", "memory:write"],
+    "memory_namespaces": ["email"],
+    "allowed_domains": ["gmail.googleapis.com", "www.googleapis.com"],
+    "credentials": [
+        {
+            "id": "google_gmail_oauth",
+            "label": "Gmail",
+            "type": "oauth",
+            "required": true,
+            "help_url": "https://console.cloud.google.com",
+            "help_text": "Connect your Google account to access Gmail."
+        }
+    ],
+    "max_tokens": 4000,
+    "timeout_seconds": 60,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": false
+}

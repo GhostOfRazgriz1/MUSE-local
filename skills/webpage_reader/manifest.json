@@ -1,0 +1,20 @@
+{
+    "name": "Webpage Reader",
+    "version": "0.1.0",
+    "description": "Read and extract text content from web pages. Fetch a URL, parse the HTML, and return clean readable text for summarization or analysis. Use when the user provides a link or asks to read a webpage.",
+    "author": "Agent OS",
+    "permissions": ["web:fetch", "memory:read", "memory:write"],
+    "memory_namespaces": ["webpage_reader"],
+    "allowed_domains": [],
+    "max_tokens": 6000,
+    "timeout_seconds": 30,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true,
+    "actions": [
+        {"id": "read", "description": "Read and extract text from a webpage URL"},
+        {"id": "summarize", "description": "Read a webpage and provide a concise summary"}
+    ]
+}

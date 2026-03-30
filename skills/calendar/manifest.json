@@ -1,0 +1,26 @@
+{
+    "name": "Calendar",
+    "version": "0.1.0",
+    "description": "View, create, and manage calendar events. Check your schedule, see upcoming meetings, create new events, find available times. Uses Google Calendar.",
+    "author": "Agent OS",
+    "permissions": ["calendar:read", "calendar:write", "profile:read", "memory:read", "memory:write"],
+    "memory_namespaces": ["calendar"],
+    "allowed_domains": ["www.googleapis.com"],
+    "credentials": [
+        {
+            "id": "google_calendar_oauth",
+            "label": "Google Calendar",
+            "type": "oauth",
+            "required": true,
+            "help_url": "https://console.cloud.google.com",
+            "help_text": "Connect your Google account to access Calendar."
+        }
+    ],
+    "max_tokens": 4000,
+    "timeout_seconds": 60,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true
+}

@@ -1,0 +1,16 @@
+{
+    "name": "Reminders",
+    "version": "0.1.0",
+    "description": "Set, list, and manage reminders and alerts. Schedule notifications, don't forget tasks, remember to do things at a specific time. Get notified when it's time.",
+    "author": "Agent OS",
+    "permissions": ["memory:read", "memory:write"],
+    "memory_namespaces": ["reminders"],
+    "allowed_domains": [],
+    "max_tokens": 2000,
+    "timeout_seconds": 30,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true
+}

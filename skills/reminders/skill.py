@@ -1,0 +1,129 @@
+"""Reminders skill — set, list, and manage reminders."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+
+
+async def run(ctx) -> dict:
+    """Entry point for the Reminders skill."""
+    instruction = ctx.brief.get("instruction", "")
+    lower = instruction.lower()
+
+    if any(w in lower for w in ["set", "remind", "create", "add", "schedule"]):
+        return await _set_reminder(ctx, instruction)
+    elif any(w in lower for w in ["list", "show", "all reminders", "upcoming"]):
+        return await _list_reminders(ctx)
+    elif any(w in lower for w in ["delete", "remove", "cancel", "clear"]):
+        return await _delete_reminder(ctx, instruction)
+    else:
+        return await _set_reminder(ctx, instruction)
+
+
+async def _set_reminder(ctx, instruction: str) -> dict:
+    """Set a new reminder."""
+    # Use LLM to extract reminder details
+    now = datetime.now(timezone.utc).isoformat()
+    result = await ctx.llm.complete(
+        prompt=f"Extract the reminder details from this request. Current time: {now}\n\n"
+               f"Request: {instruction}\n\n"
+               f"Respond with JSON: {{\"what\": \"description of what to remember\", "
+               f"\"when\": \"ISO 8601 datetime or 'unspecified'\", "
+               f"\"recurring\": false}}",
+        system="Extract structured reminder data. Respond only with valid JSON.",
+    )
+
+    try:
+        parsed = json.loads(result)
+    except json.JSONDecodeError:
+        parsed = {"what": instruction, "when": "unspecified", "recurring": False}
+
+    what = parsed.get("what", instruction)
+    when = parsed.get("when", "unspecified")
+    recurring = parsed.get("recurring", False)
+
+    key = f"reminder.{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    reminder = json.dumps({
+        "what": what,
+        "when": when,
+        "recurring": recurring,
+        "created_at": now,
+        "status": "active",
+    })
+
+    await ctx.memory.write(key, reminder, value_type="json")
+
+    time_str = f" for {when}" if when != "unspecified" else ""
+    return {
+        "payload": {"key": key, "what": what, "when": when},
+        "summary": f"Reminder set{time_str}: \"{what}\"",
+        "success": True,
+    }
+
+
+async def _list_reminders(ctx) -> dict:
+    """List all active reminders."""
+    keys = await ctx.memory.list_keys("reminder.")
+
+    if not keys:
+        return {
+            "payload": {"reminders": []},
+            "summary": "You don't have any reminders.",
+            "success": True,
+        }
+
+    reminders = []
+    for key in keys:
+        value = await ctx.memory.read(key)
+        if value:
+            try:
+                r = json.loads(value)
+                if r.get("status") == "active":
+                    reminders.append(r)
+            except json.JSONDecodeError:
+                reminders.append({"what": value, "when": "unspecified"})
+
+    if not reminders:
+        return {
+            "payload": {"reminders": []},
+            "summary": "No active reminders.",
+            "success": True,
+        }
+
+    lines = []
+    for r in reminders:
+        when = r.get("when", "unspecified")
+        time_str = f" ({when})" if when != "unspecified" else ""
+        lines.append(f"- {r.get('what', 'Unknown')}{time_str}")
+
+    return {
+        "payload": {"reminders": reminders},
+        "summary": f"Active reminders:\n" + "\n".join(lines),
+        "success": True,
+    }
+
+
+async def _delete_reminder(ctx, instruction: str) -> dict:
+    """Delete a reminder."""
+    results = await ctx.memory.search(instruction, limit=1)
+    if results:
+        # Mark as cancelled rather than deleting
+        try:
+            data = json.loads(results[0].value)
+            data["status"] = "cancelled"
+            await ctx.memory.write(results[0].key, json.dumps(data), value_type="json")
+            return {
+                "payload": {"cancelled": results[0].key},
+                "summary": f"Cancelled reminder: {data.get('what', results[0].key)}",
+                "success": True,
+            }
+        except (json.JSONDecodeError, AttributeError):
+            await ctx.memory.delete(results[0].key)
+            return {
+                "payload": {"deleted": results[0].key},
+                "summary": f"Deleted reminder.",
+                "success": True,
+            }
+
+    return {"payload": None, "summary": "Reminder not found.", "success": True}

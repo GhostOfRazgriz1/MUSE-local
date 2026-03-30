@@ -1,0 +1,51 @@
+{
+    "name": "Search",
+    "version": "0.3.0",
+    "description": "Search the web for information, look things up online, research topics. Ask about anything: people, places, facts, current events, technical questions.",
+    "author": "Agent OS",
+    "permissions": ["web:fetch", "memory:read", "memory:write"],
+    "memory_namespaces": ["search"],
+    "allowed_domains": [
+        "api.tavily.com",
+        "api.search.brave.com",
+        "api.bing.microsoft.com",
+        "api.duckduckgo.com"
+    ],
+    "actions": [
+        {"id": "search", "description": "Search the web for information on a topic"},
+        {"id": "configure", "description": "Set up or change the search API key"}
+    ],
+    "credentials": [
+        {
+            "id": "tavily_api_key",
+            "label": "Tavily API Key",
+            "type": "api_key",
+            "required": false,
+            "help_url": "https://tavily.com",
+            "help_text": "Sign up at tavily.com to get an API key for web search."
+        },
+        {
+            "id": "brave_api_key",
+            "label": "Brave Search API Key",
+            "type": "api_key",
+            "required": false,
+            "help_url": "https://brave.com/search/api/",
+            "help_text": "Get a free API key at brave.com/search/api (2,000 queries/month free)."
+        },
+        {
+            "id": "bing_api_key",
+            "label": "Bing Search API Key",
+            "type": "api_key",
+            "required": false,
+            "help_url": "https://portal.azure.com/",
+            "help_text": "Create a Bing Search v7 resource in the Azure portal (1,000 calls/month free)."
+        }
+    ],
+    "max_tokens": 4000,
+    "timeout_seconds": 60,
+    "isolation_tier": "lightweight",
+    "entry_point": "skill.py",
+    "is_first_party": true,
+    "supports_rollback": false,
+    "idempotent": true
+}
