@@ -121,7 +121,7 @@ async def _fetch_page(ctx, instruction: str) -> dict | None:
 
     try:
         resp = await ctx.http.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; AgentOS/1.0)",
+            "User-Agent": "Mozilla/5.0 (compatible; MUSE/1.0)",
             "Accept": "text/html,application/xhtml+xml,*/*",
         })
     except Exception as e:

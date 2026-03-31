@@ -212,6 +212,14 @@ CREATE TABLE IF NOT EXISTS plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_session ON plans(session_id, status);
+
+-- MCP server configurations
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    server_id TEXT PRIMARY KEY,
+    config_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 WAL_DB_SCHEMA = """

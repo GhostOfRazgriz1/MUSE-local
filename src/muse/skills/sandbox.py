@@ -223,8 +223,8 @@ class SkillSandbox:
             # Close bridge (releases httpx connection pool, etc.)
             try:
                 await bridge.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error closing bridge for task %s: %s", task_id, e)
             # Unregister bridge
             orch = getattr(self, "_orchestrator", None)
             if orch:

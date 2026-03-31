@@ -63,8 +63,9 @@ class DebugTracer:
         try:
             self._file.write(json.dumps(line, default=str) + "\n")
             self._file.flush()
-        except Exception:
-            pass  # never let tracing crash the app
+        except Exception as e:
+            import sys
+            print(f"[DebugTracer] write failed: {e}", file=sys.stderr)
 
     def close(self) -> None:
         if self._file:

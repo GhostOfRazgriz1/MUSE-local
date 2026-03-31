@@ -49,10 +49,14 @@ DEFAULTS = {
 IDLE_NUDGE_THRESHOLD = 90
 # Idle nudge: how often to check (seconds)
 IDLE_CHECK_INTERVAL = 60
+# Idle nudge: cooldown after sending a suggestion (seconds)
+IDLE_NUDGE_COOLDOWN = 600
+# Idle nudge: don't nudge if last message was within this window (seconds)
+ACTIVE_CONVERSATION_WINDOW = 300
 # Autonomous: how often to check for opportunities (seconds)
 AUTONOMOUS_CHECK_INTERVAL = 300
 # Max consecutive session dismissals before silencing
-MAX_SESSION_DISMISSALS = 3
+MAX_SESSION_DISMISSALS = 2
 
 
 class ProactivityManager:
@@ -70,6 +74,11 @@ class ProactivityManager:
         # Session-level dismiss tracking
         self._session_dismissals = 0
         self._silenced = False
+
+        # One-at-a-time: track whether a suggestion is pending (unacknowledged)
+        self._pending_suggestion = False
+        # Cooldown: timestamp of last suggestion sent
+        self._last_suggestion_time: float = 0
 
         # Background tasks
         self._idle_task: asyncio.Task | None = None
@@ -96,6 +105,8 @@ class ProactivityManager:
         """Reset session-scoped state (called on new session)."""
         self._session_dismissals = 0
         self._silenced = False
+        self._pending_suggestion = False
+        self._last_suggestion_time = 0
 
     # ── Settings ────────────────────────────────────────────────
 
@@ -110,7 +121,8 @@ class ProactivityManager:
                 ) as cursor:
                     row = await cursor.fetchone()
                 settings[short] = row[0] if row else default
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to load setting %s: %s", key, e)
                 settings[short] = default
 
         return {
@@ -251,8 +263,8 @@ class ProactivityManager:
                         pass
             if active:
                 reminder_ctx = f"\nPending reminders: {', '.join(active)}"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch reminders for nudge: %s", e)
 
         # Get user profile
         profile_ctx = ""
@@ -262,8 +274,8 @@ class ProactivityManager:
                 entry = await self._orch._memory_repo.get("_profile", key)
                 if entry and entry.get("value"):
                     profile_ctx += f"\n{key}: {entry['value']}"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch profile for nudge: %s", e)
 
         skill_catalog = self._orch._classifier._cached_skill_lines
         model = await self._orch._model_router.resolve_model()
@@ -328,13 +340,28 @@ class ProactivityManager:
                 if not self._orch._event_listeners:
                     continue
 
+                # Don't pile up — wait for the previous suggestion to be acknowledged
+                if self._pending_suggestion:
+                    continue
+
+                # Respect cooldown after the last suggestion
+                if time.monotonic() - self._last_suggestion_time < IDLE_NUDGE_COOLDOWN:
+                    continue
+
                 # Must be idle long enough
                 idle_seconds = time.monotonic() - self._orch._dreaming._last_activity
                 if idle_seconds < IDLE_NUDGE_THRESHOLD:
                     continue
 
+                # Don't nudge during active conversations — if the user
+                # sent a message recently they're engaged, not idle
+                if idle_seconds < ACTIVE_CONVERSATION_WINDOW:
+                    continue
+
                 nudge = await self.generate_idle_nudge()
                 if nudge:
+                    self._pending_suggestion = True
+                    self._last_suggestion_time = time.monotonic()
                     await self._orch._emit_event({
                         "type": "suggestion",
                         "content": nudge["message"],
@@ -473,6 +500,7 @@ class ProactivityManager:
 
     async def record_feedback(self, suggestion_id: str, accepted: bool) -> None:
         """Track whether a suggestion was accepted or dismissed."""
+        self._pending_suggestion = False
         try:
             key = f"feedback.{suggestion_id}"
             await self._orch._memory_repo.put(
@@ -484,8 +512,8 @@ class ProactivityManager:
                 }),
                 value_type="json",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to persist suggestion feedback: %s", e)
 
         if not accepted:
             self._session_dismissals += 1
@@ -512,16 +540,21 @@ class ProactivityManager:
         """
         # Gather all context
         now = self._orch.user_now()
-        tz_name = self._orch._user_tz
-        time_str = now.strftime(f"%A, %B %d at %H:%M ({tz_name})")
         hour = now.hour
 
-        if hour < 12:
+        if hour < 5:
+            time_of_day = "late night"
+        elif hour < 12:
             time_of_day = "morning"
         elif hour < 17:
             time_of_day = "afternoon"
-        else:
+        elif hour < 21:
             time_of_day = "evening"
+        else:
+            time_of_day = "night"
+
+        # Use 12-hour format to avoid LLM confusion about "00:04" being ambiguous
+        time_str = now.strftime(f"%I:%M %p on %A, %B %d")
 
         # User name from profile
         user_name = ""
@@ -529,8 +562,8 @@ class ProactivityManager:
             entry = await self._orch._memory_repo.get("_profile", "user:name")
             if entry and entry.get("value"):
                 user_name = entry["value"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch user name for greeting: %s", e)
 
         # Agent name from identity
         agent_name = self._orch._parse_identity_field("name") or "MUSE"
@@ -552,8 +585,8 @@ class ProactivityManager:
                         )
                 except (json.JSONDecodeError, TypeError):
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch scheduled results for greeting: %s", e)
 
         # Pending reminders
         reminder_parts = []
@@ -571,8 +604,8 @@ class ProactivityManager:
                             )
                     except (json.JSONDecodeError, TypeError):
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch reminders for greeting: %s", e)
 
         # Dreaming suggestions
         suggestion_parts = []
@@ -588,8 +621,8 @@ class ProactivityManager:
                 await self._orch._memory_repo.put(
                     "_patterns", "suggestions", "[]", value_type="json",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch dreaming suggestions for greeting: %s", e)
 
         # Pattern summary
         pattern_summary = self._orch._patterns.summarize_recent()
@@ -617,13 +650,16 @@ class ProactivityManager:
                         f"You are {agent_name}, a personal AI assistant. "
                         f"Compose a brief, natural greeting for the user"
                         f"{(' named ' + user_name) if user_name else ''}. "
-                        f"It's {time_of_day} ({time_str}).\n\n"
+                        f"The user's local time is {time_str}. "
+                        f"Greet them as if it's {time_of_day}.\n\n"
                         f"Your personality: {personality}\n\n"
                         "Weave in any relevant context naturally — don't list "
                         "items as bullet points, instead mention them conversationally. "
                         "If there are background updates or reminders, mention them. "
                         "If you have suggestions, offer ONE as a natural question.\n\n"
-                        "Keep it to 2-4 sentences. Be warm but concise."
+                        "Keep it to 2-4 sentences. Be warm but concise. "
+                        "Use the user's local time as the only time reference — "
+                        "never mention other timezones or what time it is elsewhere."
                     )},
                     {"role": "user", "content": context_block},
                 ],

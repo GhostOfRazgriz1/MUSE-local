@@ -151,6 +151,11 @@ async def create_orchestrator(config: Config | None = None):
     if builtin_skills.exists():
         await skill_loader.load_first_party_skills(builtin_skills)
 
+    # MCP connection manager
+    from muse.mcp.connection_manager import MCPConnectionManager
+
+    mcp_manager = MCPConnectionManager(db)
+
     # Orchestrator
     from muse.kernel.orchestrator import Orchestrator
 
@@ -174,6 +179,7 @@ async def create_orchestrator(config: Config | None = None):
         skill_sandbox=skill_sandbox,
         gateway=gateway,
         oauth_manager=oauth_manager,
+        mcp_manager=mcp_manager,
     )
 
     return orchestrator

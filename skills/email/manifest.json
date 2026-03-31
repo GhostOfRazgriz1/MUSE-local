@@ -8,7 +8,7 @@
     "allowed_domains": ["gmail.googleapis.com", "www.googleapis.com"],
     "credentials": [
         {
-            "id": "google_gmail_oauth",
+            "id": "google_oauth",
             "label": "Gmail",
             "type": "oauth",
             "required": true,

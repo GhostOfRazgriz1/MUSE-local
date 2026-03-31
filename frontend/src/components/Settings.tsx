@@ -16,6 +16,8 @@ import {
   IconZap,
   IconLayoutGrid,
   IconLayoutList,
+  IconPlug,
+  IconRefresh,
 } from "./Icons";
 import { apiFetch } from "../hooks/useApiToken";
 import type { AuditEntry, ApprovalMode } from "../types/events";
@@ -35,7 +37,7 @@ interface ModelInfo {
   output_price: number;
 }
 
-type Tab = "general" | "skills" | "models" | "security" | "proactivity";
+type Tab = "general" | "skills" | "models" | "security" | "proactivity" | "mcp";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "General", icon: <IconSliders size={16} /> },
@@ -43,6 +45,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "models", label: "Models", icon: <IconCpu size={16} /> },
   { id: "security", label: "Security", icon: <IconShield size={16} /> },
   { id: "proactivity", label: "Proactivity", icon: <IconZap size={16} /> },
+  { id: "mcp", label: "MCP Servers", icon: <IconPlug size={16} /> },
 ];
 
 /* ─── Main Component ─── */
@@ -76,6 +79,7 @@ export const Settings: React.FC<SettingsProps> = ({ onBack }) => {
         {activeTab === "models" && <ModelsTab />}
         {activeTab === "security" && <SecurityTab />}
         {activeTab === "proactivity" && <ProactivityTab />}
+        {activeTab === "mcp" && <MCPTab />}
       </div>
     </div>
   );
@@ -344,6 +348,38 @@ function GeneralTab() {
           })}
           <div className="settings-hint">
             Sets the overall color scheme. Each palette includes matching backgrounds, accent, and border colors.
+          </div>
+        </div>
+      </SettingsSection>
+
+      {/* Workspace */}
+      <SettingsSection title="Workspace" description="Default folder for files the agent creates.">
+        <div className="settings-field">
+          <label className="settings-label">Workspace Directory</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              className="settings-input"
+              style={{ flex: 1 }}
+              value={settings["workspace.directory"] ?? ""}
+              placeholder={
+                (typeof window !== "undefined" && navigator.platform?.startsWith("Win")
+                  ? "C:\\Users\\...\\Documents\\MUSE"
+                  : "~/Documents/MUSE") + " (default)"
+              }
+              onChange={(e) =>
+                setSettings((prev) => ({ ...prev, "workspace.directory": e.target.value }))
+              }
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => saveSetting("workspace.directory", settings["workspace.directory"] || "")}
+              disabled={saving === "workspace.directory"}
+            >
+              {saving === "workspace.directory" ? "Saving..." : "Save"}
+            </button>
+          </div>
+          <div className="settings-hint">
+            Leave blank to use the default (Documents/MUSE). The agent can read and write here without asking.
           </div>
         </div>
       </SettingsSection>
@@ -976,6 +1012,9 @@ function SkillCredentialRow({
   };
 
   if (spec.type === "oauth") {
+    // Derive provider name from credential id (e.g. "google_oauth" → "google")
+    const providerName = spec.id.replace(/_oauth$/, "");
+
     return (
       <div className="skill-cred-row">
         <div className="skill-cred-info">
@@ -997,12 +1036,22 @@ function SkillCredentialRow({
               </button>
             </>
           ) : (
-            <a
-              href={`/api/oauth/start?provider=${spec.id}`}
-              className="btn btn-primary btn-sm"
-            >
-              Connect
-            </a>
+            <>
+              {!editing ? (
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setEditing(true)}
+                >
+                  Connect
+                </button>
+              ) : (
+                <OAuthSetupForm
+                  providerName={providerName}
+                  onComplete={() => { onUpdate(true); setEditing(false); }}
+                  onCancel={() => setEditing(false)}
+                />
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1121,6 +1170,83 @@ interface ProviderStatus {
   name: string;
   env_var: string;
   source: "env" | "vault" | null;
+}
+
+/* ─── OAuth Setup Form (inline in credential row) ─── */
+
+function OAuthSetupForm({
+  providerName,
+  onComplete,
+  onCancel,
+}: {
+  providerName: string;
+  onComplete: () => void;
+  onCancel: () => void;
+}) {
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleConnect = async () => {
+    if (!clientId.trim() || !clientSecret.trim()) {
+      setError("Both client ID and client secret are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      // Save client_id and client_secret to user_settings
+      await apiFetch(`/api/settings/oauth.${providerName}.client_id`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: clientId.trim() }),
+      });
+      await apiFetch(`/api/settings/oauth.${providerName}.client_secret`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: clientSecret.trim() }),
+      });
+      // Redirect to OAuth start — the backend will load credentials and redirect to provider
+      window.location.href = `/api/oauth/start?provider=${providerName}`;
+    } catch {
+      setError("Failed to save credentials.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="oauth-setup-form">
+      <div className="oauth-setup-fields">
+        <input
+          type="text"
+          className="settings-input"
+          placeholder="Client ID"
+          value={clientId}
+          onChange={(e) => setClientId(e.target.value)}
+          autoFocus
+        />
+        <input
+          type="password"
+          className="settings-input"
+          placeholder="Client Secret"
+          value={clientSecret}
+          onChange={(e) => setClientSecret(e.target.value)}
+        />
+      </div>
+      {error && <div className="oauth-setup-error">{error}</div>}
+      <div className="oauth-setup-actions">
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={handleConnect}
+          disabled={saving}
+        >
+          {saving ? "Saving..." : "Authorize"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ModelsTab() {
@@ -1931,6 +2057,347 @@ function ProactivityTab() {
           />
         </div>
       </SettingsSection>
+    </div>
+  );
+}
+
+/* ─── MCP Servers Tab ─── */
+
+interface MCPServer {
+  server_id: string;
+  name: string;
+  transport: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  enabled: boolean;
+  status: string;
+  error: string | null;
+  tool_count: number;
+  tools?: { name: string; description: string }[];
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  connected: "Connected",
+  connecting: "Connecting",
+  disconnected: "Disconnected",
+  error: "Error",
+};
+
+function MCPTab() {
+  const [servers, setServers] = useState<MCPServer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedTools, setExpandedTools] = useState<{ name: string; description: string }[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [toolFilter, setToolFilter] = useState("");
+
+  const fetchServers = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/mcp/servers");
+      if (res.ok) {
+        const data = await res.json();
+        setServers(data.servers || []);
+      }
+    } catch {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchServers(); }, [fetchServers]);
+
+  const handleExpand = async (serverId: string) => {
+    if (expandedId === serverId) { setExpandedId(null); return; }
+    setExpandedId(serverId);
+    setToolFilter("");
+    try {
+      const res = await apiFetch(`/api/mcp/servers/${serverId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setExpandedTools(data.tools || []);
+      }
+    } catch { setExpandedTools([]); }
+  };
+
+  const handleConnect = async (serverId: string) => {
+    // Optimistic status update
+    setServers((prev) => prev.map((s) => s.server_id === serverId ? { ...s, status: "connecting" } : s));
+    await apiFetch(`/api/mcp/servers/${serverId}/connect`, { method: "POST" });
+    fetchServers();
+  };
+
+  const handleDisconnect = async (serverId: string) => {
+    await apiFetch(`/api/mcp/servers/${serverId}/disconnect`, { method: "POST" });
+    fetchServers();
+  };
+
+  const handleDelete = async (serverId: string) => {
+    await apiFetch(`/api/mcp/servers/${serverId}`, { method: "DELETE" });
+    setServers((prev) => prev.filter((s) => s.server_id !== serverId));
+    if (expandedId === serverId) setExpandedId(null);
+  };
+
+  const filteredTools = toolFilter
+    ? expandedTools.filter((t) =>
+        t.name.toLowerCase().includes(toolFilter.toLowerCase()) ||
+        t.description?.toLowerCase().includes(toolFilter.toLowerCase())
+      )
+    : expandedTools;
+
+  if (loading) return <SettingsLoader />;
+
+  return (
+    <div className="settings-tab">
+      <SettingsSection
+        title="MCP Servers"
+        description="Connect to external tool servers using the Model Context Protocol."
+        action={
+          !showAdd && (
+            <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>
+              <IconPlus size={14} /> Add Server
+            </button>
+          )
+        }
+      >
+        {servers.length === 0 && !showAdd && (
+          <div className="mcp-empty">
+            <div className="mcp-empty-icon"><IconPlug size={32} /></div>
+            <div className="mcp-empty-text">No servers configured</div>
+            <div className="mcp-empty-hint">
+              Add an MCP server to give the agent access to external tools — databases, APIs, file systems, and more.
+            </div>
+          </div>
+        )}
+
+        {showAdd && (
+          <MCPAddForm
+            onAdded={() => { setShowAdd(false); fetchServers(); }}
+            onCancel={() => setShowAdd(false)}
+          />
+        )}
+
+        <div className="mcp-server-list">
+          {servers.map((s) => {
+            const isExpanded = expandedId === s.server_id;
+            const isConnected = s.status === "connected";
+            const isConnecting = s.status === "connecting";
+            const isError = s.status === "error";
+
+            return (
+              <div key={s.server_id} className={`mcp-card ${isExpanded ? "expanded" : ""}`}>
+                <div className="mcp-card-header" onClick={() => handleExpand(s.server_id)}>
+                  <div className="mcp-card-left">
+                    <span className={`mcp-dot ${s.status}`} title={STATUS_LABEL[s.status] || s.status} />
+                    <div className="mcp-card-title">
+                      <span className="mcp-card-name">{s.name}</span>
+                      <span className="mcp-card-meta">
+                        <span className="mcp-badge">{s.transport.toUpperCase()}</span>
+                        {isConnected && <span className="mcp-tool-count">{s.tool_count} tool{s.tool_count !== 1 ? "s" : ""}</span>}
+                        {isConnecting && <span className="mcp-connecting-label">Connecting...</span>}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mcp-card-right" onClick={(e) => e.stopPropagation()}>
+                    {isConnected ? (
+                      <button className="btn btn-ghost btn-sm" onClick={() => handleDisconnect(s.server_id)}>
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleConnect(s.server_id)}
+                        disabled={isConnecting}
+                      >
+                        {isError ? <><IconRefresh size={12} /> Retry</> : "Connect"}
+                      </button>
+                    )}
+                    <button
+                      className="settings-icon-btn danger"
+                      onClick={() => handleDelete(s.server_id)}
+                      title="Remove server"
+                    >
+                      <IconTrash size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {isError && s.error && (
+                  <div className="mcp-card-error">{s.error}</div>
+                )}
+
+                {isExpanded && (
+                  <div className="mcp-card-body">
+                    <div className="mcp-card-config">
+                      <div className="mcp-config-label">{s.transport === "stdio" ? "Command" : "Endpoint"}</div>
+                      <code className="mcp-config-value">
+                        {s.transport === "stdio" ? [s.command, ...s.args].join(" ") : s.url}
+                      </code>
+                    </div>
+
+                    {expandedTools.length > 0 && (
+                      <div className="mcp-card-tools">
+                        <div className="mcp-tools-header">
+                          <span className="mcp-config-label">Tools ({expandedTools.length})</span>
+                          {expandedTools.length > 5 && (
+                            <input
+                              className="mcp-tool-search"
+                              placeholder="Filter tools..."
+                              value={toolFilter}
+                              onChange={(e) => setToolFilter(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          )}
+                        </div>
+                        <div className="mcp-tool-grid">
+                          {filteredTools.map((tool) => (
+                            <div key={tool.name} className="mcp-tool-chip">
+                              <code className="mcp-tool-name">{tool.name}</code>
+                              {tool.description && (
+                                <span className="mcp-tool-desc">{tool.description}</span>
+                              )}
+                            </div>
+                          ))}
+                          {filteredTools.length === 0 && toolFilter && (
+                            <div className="mcp-tool-no-match">No tools match "{toolFilter}"</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </SettingsSection>
+    </div>
+  );
+}
+
+function MCPAddForm({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<"stdio" | "sse">("stdio");
+  const [command, setCommand] = useState("");
+  const [args, setArgs] = useState("");
+  const [url, setUrl] = useState("");
+  const [envText, setEnvText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const serverId = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+  const handleSubmit = async () => {
+    if (!name.trim()) { setError("Name is required."); return; }
+    if (transport === "stdio" && !command.trim()) { setError("Command is required."); return; }
+    if (transport === "sse" && !url.trim()) { setError("URL is required."); return; }
+
+    setSaving(true);
+    setError("");
+
+    const env: Record<string, string> = {};
+    for (const line of envText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.includes("=")) continue;
+      const [k, ...vParts] = trimmed.split("=");
+      env[k.trim()] = vParts.join("=").trim();
+    }
+
+    const parsedArgs = args.trim() ? args.trim().split(/\s+/) : [];
+
+    try {
+      const res = await apiFetch("/api/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          server_id: serverId || `server-${Date.now()}`,
+          name: name.trim(),
+          transport,
+          command: command.trim(),
+          args: parsedArgs,
+          env,
+          url: url.trim(),
+          enabled: true,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || data.error || "Failed to add server.");
+        setSaving(false);
+        return;
+      }
+      onAdded();
+    } catch {
+      setError("Failed to add server.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mcp-add-form">
+      <div className="mcp-add-header">
+        <div className="mcp-add-title">Add MCP Server</div>
+        <div className="mcp-add-subtitle">
+          {transport === "stdio" ? "Runs as a local subprocess" : "Connects to a remote HTTP endpoint"}
+        </div>
+      </div>
+
+      <div className="mcp-add-fields">
+        <label className="mcp-field-group">
+          <span className="mcp-field-label">Name</span>
+          <input className="settings-input" placeholder="e.g., Postgres, GitHub, Filesystem" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </label>
+
+        <label className="mcp-field-group">
+          <span className="mcp-field-label">Transport</span>
+          <div className="mcp-transport-toggle">
+            <button
+              className={`mcp-transport-btn ${transport === "stdio" ? "active" : ""}`}
+              onClick={() => setTransport("stdio")}
+              type="button"
+            >
+              Subprocess (stdio)
+            </button>
+            <button
+              className={`mcp-transport-btn ${transport === "sse" ? "active" : ""}`}
+              onClick={() => setTransport("sse")}
+              type="button"
+            >
+              HTTP (SSE)
+            </button>
+          </div>
+        </label>
+
+        {transport === "stdio" ? (
+          <>
+            <label className="mcp-field-group">
+              <span className="mcp-field-label">Command</span>
+              <input className="settings-input" placeholder="npx, python, uvx, node..." value={command} onChange={(e) => setCommand(e.target.value)} />
+            </label>
+            <label className="mcp-field-group">
+              <span className="mcp-field-label">Arguments</span>
+              <input className="settings-input" placeholder="-m mcp_server --port 3000" value={args} onChange={(e) => setArgs(e.target.value)} />
+            </label>
+            <label className="mcp-field-group">
+              <span className="mcp-field-label">Environment variables</span>
+              <textarea className="settings-input mcp-env-input" placeholder={"DATABASE_URL=postgres://...\nAPI_KEY=sk-..."} value={envText} onChange={(e) => setEnvText(e.target.value)} rows={3} />
+            </label>
+          </>
+        ) : (
+          <label className="mcp-field-group">
+            <span className="mcp-field-label">Server URL</span>
+            <input className="settings-input" placeholder="http://localhost:3001/sse" value={url} onChange={(e) => setUrl(e.target.value)} />
+          </label>
+        )}
+      </div>
+
+      {error && <div className="oauth-setup-error">{error}</div>}
+
+      <div className="mcp-add-actions">
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary btn-sm" onClick={handleSubmit} disabled={saving}>
+          {saving ? "Adding..." : "Add & Connect"}
+        </button>
+      </div>
     </div>
   );
 }

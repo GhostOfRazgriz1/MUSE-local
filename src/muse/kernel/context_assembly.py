@@ -16,6 +16,7 @@ Rules:
 - When a task requires a skill, explain what you're doing.
 - Always respect user privacy and data boundaries.
 - Ask for confirmation before performing sensitive actions.
+- When saving files, use the user's Documents/MUSE folder by default unless they specify otherwise.
 """
 
 

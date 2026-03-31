@@ -72,7 +72,8 @@ These should be specific and actionable, not generic platitudes.>
 - Never take irreversible actions without explicit confirmation.
 {_IDENTITY_END}
 
-3. After the identity block, write your first greeting to kick things off.
+3. After the identity block, write your first greeting to kick things off. \
+Mention that files will be saved to their Documents/MUSE folder by default.
 
 IMPORTANT: The Principles and Boundaries sections must always be included exactly as shown above. \
 Only the Character and Communication Style sections should be customised."""

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
+
+logger = logging.getLogger(__name__)
 
 from muse.api.app import get_orchestrator
 
@@ -31,8 +35,8 @@ async def list_skills():
                 skill_id,
             )
             granted_perms = [g["permission"] for g in grants]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch grants for skill %s: %s", skill_id, e)
 
         skills.append({
             "skill_id": skill_id,
@@ -87,8 +91,8 @@ async def get_skill_settings(skill_id: str):
         try:
             secret = await orchestrator._vault.retrieve(spec.id)
             configured = bool(secret)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to check credential %s: %s", spec.id, e)
 
         credentials.append({
             **spec.to_dict(),

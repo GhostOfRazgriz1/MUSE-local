@@ -8,7 +8,7 @@
     "allowed_domains": ["www.googleapis.com"],
     "credentials": [
         {
-            "id": "google_calendar_oauth",
+            "id": "google_oauth",
             "label": "Google Calendar",
             "type": "oauth",
             "required": true,

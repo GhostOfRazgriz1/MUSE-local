@@ -17,8 +17,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
 
 # Default output directory for agent-created files and uploads
-AGENT_DIR = Path.home() / "Documents" / "AgentOS"
-UPLOAD_DIR = AGENT_DIR / "uploads"
+DEFAULT_WORKSPACE = Path.home() / "Documents" / "MUSE"
+
+
+async def _get_workspace() -> Path:
+    """Return the user's workspace directory from settings, or the default."""
+    from muse.api.app import get_orchestrator
+    orch = get_orchestrator()
+    if orch:
+        try:
+            async with orch._db.execute(
+                "SELECT value FROM user_settings WHERE key = 'workspace.directory'"
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0] and row[0].strip():
+                return Path(row[0].strip())
+        except Exception:
+            pass
+    return DEFAULT_WORKSPACE
 
 
 class RevealRequest(BaseModel):
@@ -130,7 +146,7 @@ _BLOCKED_EXTENSIONS = frozenset({
 
 @router.post("/upload")
 async def upload_file(file: UploadFile):
-    """Accept a file upload, save to ~/Documents/AgentOS/uploads/.
+    """Accept a file upload, save to ~/Documents/MUSE/uploads/.
 
     Returns the saved file path and metadata so the chat can reference it.
     """
@@ -147,14 +163,16 @@ async def upload_file(file: UploadFile):
     if ext in _BLOCKED_EXTENSIONS:
         raise HTTPException(400, f"File type '{ext}' is not allowed")
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    dest = UPLOAD_DIR / safe_name
+    workspace = await _get_workspace()
+    upload_dir = workspace / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest = upload_dir / safe_name
 
     # Avoid overwriting — append counter if needed
     counter = 1
     stem, suffix = dest.stem, dest.suffix
     while dest.exists():
-        dest = UPLOAD_DIR / f"{stem}_{counter}{suffix}"
+        dest = upload_dir / f"{stem}_{counter}{suffix}"
         counter += 1
 
     # Read with size limit to prevent OOM
@@ -199,11 +217,11 @@ async def download_file(path: str = Query(..., description="Absolute path to the
 
 @router.get("/browse")
 async def browse_directory(
-    path: str | None = Query(None, description="Directory to list (default: AgentOS dir)"),
+    path: str | None = Query(None, description="Directory to list (default: MUSE dir)"),
 ):
     """List files in a directory for the file browser panel.
 
-    Defaults to ``~/Documents/AgentOS``.  Rejects paths outside the
+    Defaults to ``~/Documents/MUSE``.  Rejects paths outside the
     user's home directory.
     """
     if path:
@@ -213,7 +231,7 @@ async def browse_directory(
         if not str(target).startswith(str(home)):
             raise HTTPException(403, "Cannot browse outside home directory")
     else:
-        target = AGENT_DIR
+        target = await _get_workspace()
         target.mkdir(parents=True, exist_ok=True)
 
     if not target.exists():

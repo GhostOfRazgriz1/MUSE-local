@@ -118,6 +118,7 @@ class Orchestrator:
         skill_sandbox,
         gateway,
         oauth_manager=None,
+        mcp_manager=None,
     ):
         self._config = config
         self._db = db
@@ -150,6 +151,9 @@ class Orchestrator:
         self._skill_loader = skill_loader
         self._sandbox = skill_sandbox
         self._gateway = gateway
+
+        # MCP
+        self._mcp_manager = mcp_manager
 
         # Task management
         self._task_manager = TaskManager(db, config.execution.max_concurrent_tasks)
@@ -288,6 +292,12 @@ class Orchestrator:
         # Start proactive behavior loops
         self._proactivity.start()
 
+        # Start MCP connections and register tools
+        if self._mcp_manager:
+            self._mcp_manager._on_tools_changed = self._register_mcp_tools
+            await self._mcp_manager.startup()
+            await self._register_mcp_tools()
+
         logger.info("Orchestrator ready.")
 
     async def _auto_grant_first_party_permissions(self) -> None:
@@ -337,6 +347,14 @@ class Orchestrator:
         # Virtual skills (identity editing is still inline)
         lines.append(f"- {IDENTITY_SKILL_NAME}: {IDENTITY_SKILL_DESCRIPTION.split('.')[0]}")
 
+        # MCP servers
+        if self._mcp_manager:
+            for server_id, conn in self._mcp_manager.get_all_connections().items():
+                if conn.status == "connected":
+                    lines.append(
+                        f"- {conn.config.name}: MCP server ({len(conn.tools)} tools)"
+                    )
+
         if lines:
             catalog = "Available skills:\n" + "\n".join(lines)
         else:
@@ -345,12 +363,37 @@ class Orchestrator:
         self._context_assembler.set_skills_catalog(catalog)
         logger.info("Skills catalog updated (%d skills)", len(lines))
 
+    async def _register_mcp_tools(self) -> None:
+        """Register all connected MCP servers as virtual skills."""
+        if not self._mcp_manager:
+            return
+
+        all_tools = self._mcp_manager.get_all_tools()
+        for server_id, tools in all_tools.items():
+            conn = self._mcp_manager.get_connection(server_id)
+            if not conn or conn.status != "connected":
+                continue
+            actions = [
+                {"id": tool["name"], "description": tool.get("description", tool["name"])}
+                for tool in tools
+            ]
+            skill_id = f"mcp:{server_id}"
+            self._classifier.register_skill(
+                skill_id=skill_id,
+                name=conn.config.name,
+                description=f"MCP server: {conn.config.name} ({len(tools)} tools)",
+                actions=actions,
+            )
+        await self._rebuild_skills_catalog()
+
     async def stop(self) -> None:
         """Graceful shutdown: flush cache, close connections."""
         self._running = False
         self._dreaming.stop()
         self._scheduler.stop()
         self._proactivity.stop()
+        if self._mcp_manager:
+            await self._mcp_manager.shutdown()
         await self._demotion.flush_cache_to_disk()
         await self._wal.compact()
         logger.info("Orchestrator stopped.")
@@ -378,7 +421,8 @@ class Orchestrator:
         try:
             from zoneinfo import ZoneInfo
             return datetime.now(ZoneInfo(self._user_tz))
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to use timezone '%s', falling back to UTC: %s", self._user_tz, e)
             return datetime.now(timezone.utc)
 
     @property
@@ -625,8 +669,8 @@ class Orchestrator:
                 parts.append(
                     "**Background updates:**\n" + "\n".join(recent_results)
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch scheduled task results: %s", e)
 
         # Check for proactive suggestions
         try:
@@ -648,8 +692,8 @@ class Orchestrator:
                     await self._memory_repo.put(
                         "_patterns", "suggestions", "[]", value_type="json",
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to fetch proactive suggestions: %s", e)
 
         return "\n\n".join(parts)
 
@@ -685,8 +729,8 @@ class Orchestrator:
                     self._session_id, "user", user_message,
                     event_type="user_message",
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to persist onboarding user message: %s", e)
             async for event in self._onboarding.handle_answer(user_message):
                 yield event
                 # Persist assistant response
@@ -696,8 +740,8 @@ class Orchestrator:
                             self._session_id, "assistant", event["content"],
                             event_type="response",
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to persist onboarding response: %s", e)
             if not self._onboarding.is_active:
                 self._identity = load_identity(self._config)
                 self._context_assembler._identity = self._identity
@@ -731,6 +775,8 @@ class Orchestrator:
 
             # Reset idle timer — dreaming waits for inactivity
             self._dreaming.touch()
+            # Any pending suggestion is implicitly dismissed by user activity
+            self._proactivity._pending_suggestion = False
 
             # Check for retry phrases — re-run the last delegated message
             retry_phrases = ["try again", "do it again", "retry", "run it again", "redo"]
@@ -981,6 +1027,13 @@ class Orchestrator:
     ) -> AsyncIterator[dict]:
         """Delegate to a single skill via task spawning."""
         skill_id = intent.skill_id
+
+        # MCP virtual skills use a separate execution path
+        if skill_id.startswith("mcp:"):
+            async for event in self._handle_mcp_tool_call(user_message, intent):
+                yield event
+            return
+
         manifest = await self._skill_loader.get_manifest(skill_id)
 
         if not manifest:
@@ -1027,6 +1080,133 @@ class Orchestrator:
             history_snapshot=history_snapshot,
         ):
             yield event
+
+    # ------------------------------------------------------------------
+    # MCP tool execution
+    # ------------------------------------------------------------------
+
+    async def _handle_mcp_tool_call(
+        self, user_message: str, intent,
+    ) -> AsyncIterator[dict]:
+        """Execute a tool call on an MCP server."""
+        server_id = intent.skill_id.removeprefix("mcp:")
+        tool_name = intent.action
+
+        if not self._mcp_manager:
+            yield {"type": "error", "content": "MCP support is not available."}
+            return
+
+        conn = self._mcp_manager.get_connection(server_id)
+        if not conn or conn.status != "connected":
+            yield {"type": "error", "content": f"MCP server '{server_id}' is not connected."}
+            return
+
+        # Permission check
+        perm = "mcp:execute"
+        check = await self._permissions.check_permission(intent.skill_id, perm)
+        if not check.allowed and check.requires_user_approval:
+            request_id = f"mcp-perm-{server_id}-{id(intent)}"
+            self._pending_permission_tasks[request_id] = {
+                "message": user_message,
+                "skill_id": intent.skill_id,
+                "perms_needed": [perm],
+            }
+            yield {
+                "type": "permission_request",
+                "request_id": request_id,
+                "skill_id": intent.skill_id,
+                "skill_name": conn.config.name,
+                "permissions": [perm],
+                "is_first_party": False,
+            }
+            return
+
+        # Find the tool schema
+        tool_schema = None
+        for tool in conn.tools:
+            if tool["name"] == tool_name:
+                tool_schema = tool
+                break
+
+        if tool_schema is None:
+            # If no specific tool was resolved, try to match from the instruction
+            if len(conn.tools) == 1:
+                tool_schema = conn.tools[0]
+                tool_name = tool_schema["name"]
+            else:
+                yield {"type": "error", "content": f"Tool '{tool_name}' not found on MCP server '{server_id}'."}
+                return
+
+        yield {
+            "type": "task_started",
+            "task_id": f"mcp-{server_id}-{tool_name}",
+            "skill_id": intent.skill_id,
+            "skill_name": conn.config.name,
+            "action": tool_name,
+        }
+
+        try:
+            # Use LLM to extract structured arguments from natural language
+            input_schema = tool_schema.get("inputSchema", {})
+            model = await self._model_router.resolve_model()
+
+            arg_prompt = (
+                f'User request: "{user_message}"\n\n'
+                f"Tool: {tool_name}\n"
+                f"Description: {tool_schema.get('description', '')}\n"
+                f"Input schema: {json.dumps(input_schema)}\n\n"
+                f"Extract the arguments for this tool call. "
+                f"Reply with ONLY valid JSON matching the schema."
+            )
+
+            arg_result = await self._provider.complete(
+                model=model,
+                messages=[{"role": "user", "content": arg_prompt}],
+                max_tokens=500,
+            )
+            self.track_llm_usage(arg_result.tokens_in, arg_result.tokens_out)
+
+            raw_args = arg_result.text.strip()
+            # Strip markdown fences if present
+            if raw_args.startswith("```"):
+                import re as _re
+                raw_args = _re.sub(r"^```\w*\n?", "", raw_args)
+                raw_args = _re.sub(r"\n?```$", "", raw_args).strip()
+
+            arguments = json.loads(raw_args)
+
+            # Call the MCP tool
+            result = await self._mcp_manager.call_tool(server_id, tool_name, arguments)
+
+            if result.get("isError"):
+                yield {
+                    "type": "task_failed",
+                    "task_id": f"mcp-{server_id}-{tool_name}",
+                    "error": result.get("content", "MCP tool call failed"),
+                }
+                yield {"type": "error", "content": result.get("content", "MCP tool call failed")}
+            else:
+                content = result.get("content", "")
+                yield {
+                    "type": "task_completed",
+                    "task_id": f"mcp-{server_id}-{tool_name}",
+                    "result": {"summary": content[:500]},
+                }
+                yield {
+                    "type": "response",
+                    "content": content,
+                    "tokens_in": arg_result.tokens_in,
+                    "tokens_out": arg_result.tokens_out,
+                    "model": model,
+                }
+
+        except json.JSONDecodeError as e:
+            yield {"type": "error", "content": f"Failed to parse tool arguments: {e}"}
+        except ConnectionError as e:
+            yield {"type": "error", "content": f"MCP connection error: {e}"}
+        except Exception as e:
+            logger.error("MCP tool call failed: %s", e, exc_info=True)
+            yield {"type": "error", "content": f"MCP tool call failed: {e}"}
 
     # ------------------------------------------------------------------
     # Multi-task execution
@@ -1934,8 +2114,8 @@ class Orchestrator:
                                 "suggestion_id": suggestion["id"],
                                 "skill_id": suggestion.get("skill_id"),
                             }
-                    except Exception:
-                        pass  # never let suggestions crash the main flow
+                    except Exception as e:
+                        logger.debug("Post-task suggestion failed: %s", e)
 
                 asyncio.create_task(self._persist_and_absorb_task(
                     task.id, skill_id, manifest.name, instruction,

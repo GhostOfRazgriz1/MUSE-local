@@ -19,6 +19,10 @@ const PROVIDERS = [
   { id: "anthropic",  label: "Anthropic",  hint: "console.anthropic.com — Claude models" },
   { id: "openai",     label: "OpenAI",     hint: "platform.openai.com — GPT models" },
   { id: "gemini",     label: "Google Gemini", hint: "aistudio.google.com — Gemini models" },
+  { id: "deepseek",   label: "DeepSeek",   hint: "platform.deepseek.com — DeepSeek models" },
+  { id: "alibaba",    label: "Alibaba (DashScope)", hint: "dashscope.console.aliyun.com — Qwen models" },
+  { id: "bytedance",  label: "ByteDance (Volcengine)", hint: "console.volcengine.com — Doubao models" },
+  { id: "minimax",    label: "MiniMax",    hint: "platform.minimaxi.com — MiniMax models" },
 ];
 
 export const SetupCard: React.FC<SetupCardProps> = ({ onComplete }) => {
@@ -72,17 +76,18 @@ export const SetupCard: React.FC<SetupCardProps> = ({ onComplete }) => {
         </p>
 
         {/* Provider selector */}
-        <div className="setup-provider-list">
-          {PROVIDERS.map((p) => (
-            <button
-              key={p.id}
-              className={`setup-provider-btn ${selectedProvider === p.id ? "active" : ""}`}
-              onClick={() => setSelectedProvider(p.id)}
-            >
-              {p.label}
-              {p.recommended && <span className="setup-recommended">Recommended</span>}
-            </button>
-          ))}
+        <div className="setup-provider-select-wrapper">
+          <select
+            className="setup-provider-select"
+            value={selectedProvider}
+            onChange={(e) => setSelectedProvider(e.target.value)}
+          >
+            {PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}{p.recommended ? " (Recommended)" : ""}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Key input */}

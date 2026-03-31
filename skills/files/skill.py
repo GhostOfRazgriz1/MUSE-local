@@ -22,6 +22,8 @@ from typing import Any
 # ── Constants ────────────────────────────────────────────────────────
 
 APPROVED_DIRS_KEY = "config.approved_directories"
+WORKSPACE_KEY = "config.workspace_directory"
+DEFAULT_WORKSPACE = str(Path.home() / "Documents" / "MUSE")
 
 MAX_FILE_SIZE = 2_000_000       # 2 MB read limit
 MAX_DISPLAY_CHARS = 12_000      # Truncation threshold for summaries
@@ -44,14 +46,39 @@ SKIP_DIRS = frozenset({
 # ── Approved-directory management ────────────────────────────────────
 
 
+async def _get_workspace(ctx) -> str:
+    """Return the user's workspace directory, creating it if needed.
+
+    Checks the skill's own memory first, then falls back to the default.
+    The user can also set this via Settings > General > Workspace.
+    """
+    # Check skill memory (set by the skill itself)
+    custom = await ctx.memory.read(WORKSPACE_KEY)
+    if custom and custom.strip():
+        workspace = custom.strip()
+    else:
+        # Check if the orchestrator config has a workspace setting
+        # (passed through the brief's config dict from user_settings)
+        workspace = ctx.config.get("workspace.directory", "").strip() or DEFAULT_WORKSPACE
+    workspace = str(Path(workspace).resolve())
+    Path(workspace).mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
 async def _get_approved_dirs(ctx) -> list[str]:
     raw = await ctx.memory.read(APPROVED_DIRS_KEY)
     if raw:
         try:
-            return json.loads(raw)
+            dirs = json.loads(raw)
+            if dirs:
+                return dirs
         except json.JSONDecodeError:
             pass
-    return []
+
+    # First run — seed with the workspace directory
+    workspace = await _get_workspace(ctx)
+    await _save_approved_dirs(ctx, [workspace])
+    return [workspace]
 
 
 async def _save_approved_dirs(ctx, dirs: list[str]) -> None:
@@ -489,9 +516,8 @@ async def _op_write(ctx, instruction: str, params: dict) -> dict:
             suggested = re.sub(r'[<>:"/\\|?*]', '_', suggested)[:60]
             if not suggested or "." not in suggested:
                 suggested = "output.txt"
-        docs = Path.home() / "Documents" / "AgentOS"
-        docs.mkdir(parents=True, exist_ok=True)
-        path = str(docs / suggested)
+        workspace = await _get_workspace(ctx)
+        path = str(Path(workspace) / suggested)
 
     resolved = await _ensure_access(ctx, path)
     p = Path(resolved)

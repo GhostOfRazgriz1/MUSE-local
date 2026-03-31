@@ -58,13 +58,23 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onClose }) => {
       const newPath = currentPath + (currentPath.endsWith("/") || currentPath.endsWith("\\") ? "" : "/") + entry.name;
       fetchDir(newPath);
     } else {
-      // Download file
+      // Download file via authenticated fetch
       const filePath = currentPath + (currentPath.endsWith("/") || currentPath.endsWith("\\") ? "" : "/") + entry.name;
-      window.open(`/api/files/download?path=${encodeURIComponent(filePath)}`, "_blank");
+      apiFetch(`/api/files/download?path=${encodeURIComponent(filePath)}`)
+        .then((res) => res.blob())
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = entry.name;
+          a.click();
+          URL.revokeObjectURL(url);
+        })
+        .catch(() => {});
     }
   };
 
-  const dirName = currentPath.split(/[/\\]/).filter(Boolean).pop() || "AgentOS";
+  const dirName = currentPath.split(/[/\\]/).filter(Boolean).pop() || "MUSE";
 
   return (
     <div className="file-browser">

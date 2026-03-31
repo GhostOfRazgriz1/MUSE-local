@@ -92,9 +92,18 @@ const FileCard: React.FC<{ info: ReturnType<typeof parseFileCard> & {} }> = ({ i
     } catch {}
   };
 
-  const handleDownload = () => {
-    const url = `/api/files/download?path=${encodeURIComponent(info.path)}`;
-    window.open(url, "_blank");
+  const handleDownload = async () => {
+    try {
+      const { apiFetch } = await import("../hooks/useApiToken");
+      const res = await apiFetch(`/api/files/download?path=${encodeURIComponent(info.path)}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = info.path.split(/[/\\]/).pop() || "download";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {}
   };
 
   return (
@@ -233,6 +242,9 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
     { skill: string; taskId: string }[]
   >([]);
   const [respondedPermissions, setRespondedPermissions] = useState<Set<string>>(
+    new Set()
+  );
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(
     new Set()
   );
   const messageEndRef = useRef<HTMLDivElement>(null);
@@ -877,9 +889,11 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                     </div>
                   );
 
-                case "suggestion":
-                  return (
-                    <div key={i} className="suggestion-card">
+                case "suggestion": {
+                  const sugId = (evt as any).suggestion_id;
+                  if (dismissedSuggestions.has(sugId)) return null;
+                  return wrapMsg(
+                    <div className="suggestion-card">
                       <div className="suggestion-card-text">
                         {(evt as any).content}
                       </div>
@@ -887,22 +901,26 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                         <button
                           className="btn btn-sm btn-primary"
                           onClick={() => {
-                            onSuggestionFeedback((evt as any).suggestion_id, true);
-                            const text = (evt as any).content;
-                            onSend(text);
+                            onSuggestionFeedback(sugId, true);
+                            setDismissedSuggestions((s) => new Set(s).add(sugId));
+                            onSend((evt as any).content);
                           }}
                         >
                           Do it
                         </button>
                         <button
                           className="btn btn-sm btn-ghost"
-                          onClick={() => onSuggestionFeedback((evt as any).suggestion_id, false)}
+                          onClick={() => {
+                            onSuggestionFeedback(sugId, false);
+                            setDismissedSuggestions((s) => new Set(s).add(sugId));
+                          }}
                         >
                           Dismiss
                         </button>
                       </div>
                     </div>
                   );
+                }
 
                 case "autonomous_action":
                   return (
@@ -936,17 +954,17 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                   <IconBot size={16} />
                 </div>
                 <div className="activity-bubble">
+                  <div className="activity-label">
+                    {activeSkills.length > 0
+                      ? activeSkills.length === 1
+                        ? `Using ${activeSkills[0].skill}`
+                        : `Running ${activeSkills.length} tasks`
+                      : "Thinking"}
+                  </div>
                   <div className="activity-dots">
                     <div className="thinking-dot" />
                     <div className="thinking-dot" />
                     <div className="thinking-dot" />
-                  </div>
-                  <div className="activity-label">
-                    {activeSkills.length > 0
-                      ? activeSkills.length === 1
-                        ? `Using ${activeSkills[0].skill}...`
-                        : `Running ${activeSkills.length} tasks...`
-                      : "Thinking..."}
                   </div>
                 </div>
               </div>

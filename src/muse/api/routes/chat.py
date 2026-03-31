@@ -107,8 +107,8 @@ async def chat_websocket(
             while True:
                 event = await event_queue.get()
                 await websocket.send_json(event)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Event forward loop ended: %s", e)
 
     forward_task = asyncio.create_task(forward_events())
 
@@ -209,8 +209,8 @@ async def chat_websocket(
             async for event in gen:
                 _t.ws_send(event)
                 await websocket.send_json(event)
-        except Exception:
-            pass  # WebSocket may have closed
+        except Exception as e:
+            logger.debug("Stream to WS ended: %s", e)
 
     try:
         while True:

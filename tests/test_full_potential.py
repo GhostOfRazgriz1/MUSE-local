@@ -25,7 +25,7 @@ from websockets.asyncio.client import connect as ws_connect
 TIMEOUT = 180
 LOGS_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "muse" / "logs"
 TOKEN_PATH = Path(os.environ.get("LOCALAPPDATA", "")) / "muse" / ".api_token"
-FILES_OUTPUT_DIR = Path.home() / "Documents" / "AgentOS"
+FILES_OUTPUT_DIR = Path.home() / "Documents" / "MUSE"
 
 
 def _ws_url() -> str:
@@ -432,7 +432,7 @@ def wave_order_respected():
 
 
 def file_contains_search_data():
-    """Verify the most recently created file in the AgentOS output
+    """Verify the most recently created file in the MUSE output
     directory contains substantive content from search results (not
     just a generic LLM generation)."""
     def _check(events):
