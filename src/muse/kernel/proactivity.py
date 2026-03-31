@@ -40,6 +40,7 @@ DEFAULTS = {
     "proactivity.level1": "true",
     "proactivity.level2": "true",
     "proactivity.level3": "false",
+    "proactivity.llm_greeting": "true",
     "proactivity.suggestion_budget": "10",
     "proactivity.action_budget": "3",
     "proactivity.level3_skills": "[]",
@@ -129,6 +130,7 @@ class ProactivityManager:
             "level1": settings["level1"] == "true",
             "level2": settings["level2"] == "true",
             "level3": settings["level3"] == "true",
+            "llm_greeting": settings["llm_greeting"] == "true",
             "suggestion_budget": int(settings["suggestion_budget"]),
             "action_budget": int(settings["action_budget"]),
             "level3_skills": json.loads(settings["level3_skills"]),
@@ -537,7 +539,29 @@ class ProactivityManager:
         """LLM-compose an adaptive greeting from context.
 
         Falls back to static greeting + briefing on failure.
+        When ``llm_greeting`` is disabled, always uses the static path.
         """
+        settings = await self.get_settings()
+
+        # User name + agent personality (needed for both paths)
+        user_name = ""
+        try:
+            entry = await self._orch._memory_repo.get("_profile", "user:name")
+            if entry and entry.get("value"):
+                user_name = entry["value"]
+        except Exception as e:
+            logger.debug("Failed to fetch user name for greeting: %s", e)
+
+        personality = self._orch._parse_identity_field("greeting") or ""
+
+        if not settings["llm_greeting"]:
+            # Static greeting — no LLM call
+            static = personality or f"Hello{(', ' + user_name) if user_name else ''}!"
+            briefing = await self._orch._build_briefing()
+            if briefing:
+                return f"{static}\n\n{briefing}"
+            return static
+
         # Gather all context
         now = self._orch.user_now()
         hour = now.hour
@@ -556,18 +580,8 @@ class ProactivityManager:
         # Use 12-hour format to avoid LLM confusion about "00:04" being ambiguous
         time_str = now.strftime(f"%I:%M %p on %A, %B %d")
 
-        # User name from profile
-        user_name = ""
-        try:
-            entry = await self._orch._memory_repo.get("_profile", "user:name")
-            if entry and entry.get("value"):
-                user_name = entry["value"]
-        except Exception as e:
-            logger.debug("Failed to fetch user name for greeting: %s", e)
-
         # Agent name from identity
         agent_name = self._orch._parse_identity_field("name") or "MUSE"
-        personality = self._orch._parse_identity_field("greeting") or ""
 
         # Scheduled task results
         briefing_parts = []

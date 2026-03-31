@@ -523,6 +523,7 @@ interface SkillInfo {
   allowed_domains: string[];
   actions: ActionSpec[];
   credentials: CredentialSpec[];
+  category: string;
   isolation_tier: string;
   is_first_party: boolean;
   max_tokens: number;
@@ -548,13 +549,31 @@ function SkillsTab() {
       return v === "list" ? "list" : "grid";
     } catch { return "grid"; }
   });
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [defaults, setDefaults] = useState<Record<string, string>>({});
+  const [categories, setCategories] = useState<Record<string, { skill_id: string; name: string }[]>>({});
 
   useEffect(() => {
-    apiFetch("/api/skills")
-      .then((r) => r.json())
-      .then((d) => setSkills(d.skills || []))
+    Promise.all([
+      apiFetch("/api/skills").then((r) => r.json()),
+      apiFetch("/api/skills/defaults").then((r) => r.json()),
+    ])
+      .then(([skillsRes, defaultsRes]) => {
+        setSkills(skillsRes.skills || []);
+        setDefaults(defaultsRes.defaults || {});
+        setCategories(defaultsRes.categories || {});
+      })
       .catch(() => setSkills([]))
       .finally(() => setLoading(false));
+  }, []);
+
+  const setDefault = useCallback(async (category: string, skillId: string) => {
+    setDefaults((prev) => ({ ...prev, [category]: skillId }));
+    await apiFetch(`/api/skills/defaults/${category}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skill_id: skillId }),
+    });
   }, []);
 
   const handleViewChange = (v: SkillView) => {
@@ -573,8 +592,14 @@ function SkillsTab() {
 
   if (loading) return <SettingsLoader />;
 
-  const firstParty = skills.filter((s) => s.is_first_party);
-  const thirdParty = skills.filter((s) => !s.is_first_party);
+  const filtered = categoryFilter === "all"
+    ? skills
+    : skills.filter((s) => (s.category || "") === categoryFilter);
+  const firstParty = filtered.filter((s) => s.is_first_party);
+  const thirdParty = filtered.filter((s) => !s.is_first_party);
+
+  // Collect unique categories from all skills (not filtered)
+  const allCategories = [...new Set(skills.map((s) => s.category).filter(Boolean))].sort();
 
   const viewToggle = skills.length > 0 ? (
     <div className="skill-view-toggle">
@@ -607,6 +632,58 @@ function SkillsTab() {
           {skills.length !== 1 ? "s" : ""} installed.
         </p>
       </div>
+
+      {/* Category filter */}
+      {allCategories.length > 1 && (
+        <div className="skill-category-bar">
+          <button
+            className={`skill-category-chip ${categoryFilter === "all" ? "active" : ""}`}
+            onClick={() => setCategoryFilter("all")}
+          >
+            All
+          </button>
+          {allCategories.map((cat) => (
+            <button
+              key={cat}
+              className={`skill-category-chip ${categoryFilter === cat ? "active" : ""}`}
+              onClick={() => setCategoryFilter(cat)}
+            >
+              {cat.charAt(0).toUpperCase() + cat.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Skill defaults per category */}
+      {Object.keys(categories).length > 0 && categoryFilter === "all" && (
+        <SettingsSection
+          title="Defaults"
+          description="When multiple skills can handle the same task, the default is used."
+        >
+          {Object.entries(categories).map(([cat, catSkills]) => (
+            catSkills.length > 1 ? (
+              <div key={cat} className="skill-default-row">
+                <span className="skill-default-label">
+                  {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                </span>
+                <select
+                  className="settings-input"
+                  style={{ width: "auto", minWidth: 160 }}
+                  value={defaults[cat] || ""}
+                  onChange={(e) => setDefault(cat, e.target.value)}
+                >
+                  <option value="">Auto (LLM decides)</option>
+                  {catSkills.map((s) => (
+                    <option key={s.skill_id} value={s.skill_id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null
+          ))}
+        </SettingsSection>
+      )}
 
       {skills.length === 0 ? (
         <SettingsSection title="Installed Skills" description="No skills are installed yet.">
@@ -2007,6 +2084,22 @@ function ProactivityTab() {
             className="settings-toggle"
             checked={getSetting("proactivity.level3", "false") === "true"}
             onChange={(e) => setSetting("proactivity.level3", e.target.checked ? "true" : "false")}
+          />
+        </label>
+
+        <label className="settings-toggle-row">
+          <span>
+            <strong>LLM-powered greeting</strong><br />
+            <span className="settings-toggle-hint">
+              Use an LLM call to compose a context-aware greeting each session.
+              When off, uses a static greeting from your identity — saves tokens.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            className="settings-toggle"
+            checked={getSetting("proactivity.llm_greeting", "true") === "true"}
+            onChange={(e) => setSetting("proactivity.llm_greeting", e.target.checked ? "true" : "false")}
           />
         </label>
       </SettingsSection>

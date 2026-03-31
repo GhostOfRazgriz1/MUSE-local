@@ -414,6 +414,50 @@ class Orchestrator:
                 logger.warning("Database backup failed: %s", e)
 
     # ------------------------------------------------------------------
+    # Skill preference resolution
+    # ------------------------------------------------------------------
+
+    async def _apply_skill_preference(self, intent):
+        """Swap the classified skill for the user's preferred skill in the same category.
+
+        If the user set a default skill for the "search" category, and the
+        classifier picked "Search", but the user prefers "Exa Search", this
+        swaps the skill_id. The intent mode and action are preserved.
+        """
+        manifest = await self._skill_loader.get_manifest(intent.skill_id)
+        if not manifest or not manifest.category:
+            return intent
+
+        # Check if user has a preferred skill for this category
+        key = f"skill_default.{manifest.category}"
+        try:
+            async with self._db.execute(
+                "SELECT value FROM user_settings WHERE key = ?", (key,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        except Exception:
+            return intent
+
+        if not row or not row[0]:
+            return intent
+
+        preferred_id = row[0]
+        if preferred_id == intent.skill_id:
+            return intent  # already using the preferred skill
+
+        # Verify the preferred skill is actually installed
+        preferred_manifest = await self._skill_loader.get_manifest(preferred_id)
+        if not preferred_manifest:
+            return intent  # preferred skill was uninstalled, fall back
+
+        logger.debug(
+            "Skill preference: swapping %s → %s (category: %s)",
+            intent.skill_id, preferred_id, manifest.category,
+        )
+        intent.skill_id = preferred_id
+        return intent
+
+    # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
 
@@ -819,6 +863,10 @@ class Orchestrator:
             intent = await self._classifier.classify(user_message)
             _t.classify_result(intent)
 
+            # Apply user's skill preference per category
+            if intent.skill_id and not intent.skill_id.startswith("mcp:"):
+                intent = await self._apply_skill_preference(intent)
+
             if intent.mode == ExecutionMode.INLINE:
                 await self._patterns.record("inline", instruction=user_message)
                 async for event in self._handle_inline(user_message, intent, history_snapshot):
@@ -1046,6 +1094,7 @@ class Orchestrator:
     async def _handle_delegated(
         self, user_message: str, intent,
         history_snapshot: list[dict] | None = None,
+        skip_permission_check: bool = False,
     ) -> AsyncIterator[dict]:
         """Delegate to a single skill via task spawning."""
         skill_id = intent.skill_id
@@ -1062,12 +1111,15 @@ class Orchestrator:
             yield {"type": "error", "content": f"Skill '{skill_id}' not found."}
             return
 
-        # Permission check — yield requests and return if any are missing
-        missing_perms = []
-        for perm in manifest.permissions:
-            check = await self._permissions.check_permission(skill_id, perm)
-            if not check.allowed and check.requires_user_approval:
-                missing_perms.append(perm)
+        # Permission check — skip if resuming after permission approval
+        if not skip_permission_check:
+            missing_perms = []
+            for perm in manifest.permissions:
+                check = await self._permissions.check_permission(skill_id, perm)
+                if not check.allowed and check.requires_user_approval:
+                    missing_perms.append(perm)
+        else:
+            missing_perms = []
 
         if missing_perms:
             request_ids = []
@@ -2279,13 +2331,17 @@ class Orchestrator:
             ):
                 yield event
         elif pending.get("intent"):
-            async for event in self._handle_delegated(user_message, pending["intent"]):
+            async for event in self._handle_delegated(
+                user_message, pending["intent"], skip_permission_check=True,
+            ):
                 yield event
         else:
             # Fallback: re-classify (but still skip message recording)
             intent = await self._classifier.classify(user_message)
             if intent.mode == ExecutionMode.DELEGATED:
-                async for event in self._handle_delegated(user_message, intent):
+                async for event in self._handle_delegated(
+                    user_message, intent, skip_permission_check=True,
+                ):
                     yield event
             elif intent.mode == ExecutionMode.MULTI_DELEGATED:
                 async for event in self._handle_multi_delegated(user_message, intent):

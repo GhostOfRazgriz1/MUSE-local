@@ -2,6 +2,7 @@
     "name": "Shell",
     "version": "0.1.0",
     "description": "Open files, URLs, and applications. Run shell commands. Use when the user wants to open something, launch an app, check git status, run a build, or execute any terminal command.",
+    "category": "code",
     "author": "MUSE",
     "permissions": ["memory:read", "memory:write", "file:read"],
     "memory_namespaces": ["shell"],

@@ -152,3 +152,70 @@ async def uninstall_skill(skill_id: str):
     await orchestrator._permissions.permission_repo.revoke_all_for_skill(skill_id)
     await orchestrator._rebuild_skills_catalog()
     return {"status": "uninstalled", "skill_id": skill_id}
+
+
+# ------------------------------------------------------------------
+# Skill defaults per category
+# ------------------------------------------------------------------
+
+@router.get("/defaults")
+async def get_skill_defaults():
+    """Return the user's preferred skill for each category."""
+    from datetime import datetime, timezone
+    orchestrator = get_orchestrator()
+    if not orchestrator:
+        return {"defaults": {}}
+
+    # Collect all categories from installed skills
+    installed = await orchestrator._skill_loader.get_installed()
+    categories: dict[str, list[dict]] = {}
+    for skill in installed:
+        m = skill.get("manifest", {})
+        cat = m.get("category", "")
+        if cat:
+            categories.setdefault(cat, []).append({
+                "skill_id": skill["skill_id"],
+                "name": m.get("name", skill["skill_id"]),
+            })
+
+    # Load user preferences
+    defaults: dict[str, str] = {}
+    for cat in categories:
+        try:
+            async with orchestrator._db.execute(
+                "SELECT value FROM user_settings WHERE key = ?",
+                (f"skill_default.{cat}",),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0]:
+                defaults[cat] = row[0]
+        except Exception:
+            pass
+
+    return {"defaults": defaults, "categories": categories}
+
+
+@router.put("/defaults/{category}")
+async def set_skill_default(category: str, body: dict):
+    """Set the preferred skill for a category."""
+    from datetime import datetime, timezone
+    orchestrator = get_orchestrator()
+    if not orchestrator:
+        return {"error": "Not ready"}
+
+    skill_id = body.get("skill_id", "").strip()
+    key = f"skill_default.{category}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not skill_id:
+        # Clear the preference
+        await orchestrator._db.execute(
+            "DELETE FROM user_settings WHERE key = ?", (key,)
+        )
+    else:
+        await orchestrator._db.execute(
+            "INSERT OR REPLACE INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, skill_id, now),
+        )
+    await orchestrator._db.commit()
+    return {"category": category, "skill_id": skill_id or None}

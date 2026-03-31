@@ -50,6 +50,7 @@ class SkillManifest:
     credentials: list[CredentialSpec] = field(default_factory=list)
     max_tokens: int = 4000
     timeout_seconds: int = 300
+    category: str = ""  # e.g. "search", "email", "files", "code", "productivity"
     isolation_tier: str = "standard"  # "lightweight", "standard", "hardened"
     signature: str = ""
     entry_point: str = "skill.py"

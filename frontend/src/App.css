@@ -3616,6 +3616,55 @@ textarea:focus-visible {
   color: var(--accent);
 }
 
+/* ── Skill Category Bar ── */
+.skill-category-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 4px;
+  margin-bottom: 8px;
+}
+
+.skill-category-chip {
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-transform: capitalize;
+}
+
+.skill-category-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.skill-category-chip.active {
+  background: var(--accent);
+  color: var(--bg-app);
+  border-color: var(--accent);
+}
+
+/* ── Skill Default Picker ── */
+.skill-default-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.skill-default-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
 .skill-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
