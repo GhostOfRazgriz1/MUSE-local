@@ -548,45 +548,59 @@ class ProactivityManager:
         When ``llm_greeting`` is disabled, always uses the static path.
         """
         settings = await self.get_settings()
-
-        # User name + agent personality (needed for both paths)
-        user_name = ""
-        try:
-            entry = await self._orch._memory_repo.get("_profile", "user:name")
-            if entry and entry.get("value"):
-                user_name = entry["value"]
-        except Exception as e:
-            logger.debug("Failed to fetch user name for greeting: %s", e)
-
         personality = self._orch._parse_identity_field("greeting") or ""
+        repo = self._orch._memory_repo
 
-        # ── Gather structured context (used by both paths) ──────────
+        # ── Wave 1: all independent DB fetches in parallel ─────────
+        _consumer_ns = ("_profile", "_facts", "_project", "_conversation", "_emotions")
 
-        # Pending reminders
+        wave1 = await asyncio.gather(
+            repo.get("_profile", "user:name"),                          # 0: user name
+            repo.list_keys("Reminders", prefix="reminder."),            # 1: reminder keys
+            repo.get("_patterns", "suggestions"),                       # 2: suggestions
+            self._orch._session_repo.get_session_stats(),               # 3: session stats
+            self._orch._emotions.compute_relationship_score(),          # 4: relationship
+            *[repo.get_by_relevance(namespace=ns, limit=500, min_score=0.0)
+              for ns in _consumer_ns],                                  # 5-9: memory counts
+            return_exceptions=True,
+        )
+
+        # ── Unpack wave 1 results ─────────────────────────────────
+        user_name = ""
+        name_entry = wave1[0]
+        if not isinstance(name_entry, Exception) and name_entry and name_entry.get("value"):
+            user_name = name_entry["value"]
+
+        reminder_keys = wave1[1] if not isinstance(wave1[1], Exception) else []
+        suggestions_entry = wave1[2]
+        session_stats = wave1[3]
+        rel = wave1[4]
+
+        # ── Wave 2: fetch individual reminder details in parallel ──
         reminders = []
-        try:
-            keys = await self._orch._memory_repo.list_keys("Reminders", prefix="reminder.")
-            for key in keys[:5]:
-                entry = await self._orch._memory_repo.get("Reminders", key)
-                if entry:
-                    try:
-                        data = json.loads(entry["value"])
-                        if data.get("status") == "active":
-                            reminders.append({
-                                "what": data.get("what", ""),
-                                "when": data.get("when", ""),
-                            })
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-        except Exception as e:
-            logger.debug("Failed to fetch reminders for greeting: %s", e)
+        if reminder_keys and not isinstance(reminder_keys, Exception):
+            reminder_entries = await asyncio.gather(
+                *[repo.get("Reminders", key) for key in reminder_keys[:5]],
+                return_exceptions=True,
+            )
+            for entry in reminder_entries:
+                if isinstance(entry, Exception) or not entry:
+                    continue
+                try:
+                    data = json.loads(entry["value"])
+                    if data.get("status") == "active":
+                        reminders.append({
+                            "what": data.get("what", ""),
+                            "when": data.get("when", ""),
+                        })
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        # Dreaming suggestions → quick action chips
+        # ── Process suggestions ────────────────────────────────────
         suggestions = []
-        try:
-            entry = await self._orch._memory_repo.get("_patterns", "suggestions")
-            if entry and entry.get("value"):
-                raw = json.loads(entry["value"])
+        if not isinstance(suggestions_entry, Exception) and suggestions_entry and suggestions_entry.get("value"):
+            try:
+                raw = json.loads(suggestions_entry["value"])
                 for s in raw[:3]:
                     msg = s.get("message", "")
                     if msg:
@@ -595,51 +609,42 @@ class ProactivityManager:
                             "content": msg,
                             "skill_id": s.get("skill_id", ""),
                         })
-                # Clear after reading
-                await self._orch._memory_repo.put(
-                    "_patterns", "suggestions", "[]", value_type="json",
+                # Clear after reading (fire-and-forget)
+                asyncio.create_task(
+                    repo.put("_patterns", "suggestions", "[]", value_type="json")
                 )
-        except Exception as e:
-            logger.debug("Failed to fetch dreaming suggestions for greeting: %s", e)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
-        # Relationship stats + progression level
+        # ── Build stats ────────────────────────────────────────────
         stats = {"sessions": 0, "memories": 0, "days_together": 0,
                  "relationship_level": 1, "relationship_label": "Just getting started"}
-        try:
-            session_stats = await self._orch._session_repo.get_session_stats()
-            stats["sessions"] = session_stats["session_count"]
-            if session_stats["first_session_at"]:
-                first = datetime.fromisoformat(session_stats["first_session_at"])
-                now_utc = datetime.now(timezone.utc)
-                stats["days_together"] = max(1, (now_utc - first).days)
-        except Exception as e:
-            logger.debug("Failed to fetch session stats for greeting: %s", e)
-        try:
-            # Count only consumer-visible entries so the number matches
-            # what the Memory panel actually shows (same filtering as the
-            # /api/memories endpoint).
-            _consumer_ns = ("_profile", "_facts", "_project", "_conversation", "_emotions")
-            visible_count = 0
-            for ns in _consumer_ns:
-                entries = await self._orch._memory_repo.get_by_relevance(
-                    namespace=ns, limit=500, min_score=0.0,
-                )
-                for e in entries:
-                    val = (e.get("value") or "").strip()
-                    if val.startswith(("{", "[", '"{')) or "failed LLM review" in val:
-                        continue
-                    visible_count += 1
-            stats["memories"] = visible_count
-        except Exception as e:
-            logger.debug("Failed to fetch memory count for greeting: %s", e)
-        try:
-            rel = await self._orch._emotions.compute_relationship_score()
+
+        if not isinstance(session_stats, Exception):
+            stats["sessions"] = session_stats.get("session_count", 0)
+            first_at = session_stats.get("first_session_at")
+            if first_at:
+                first = datetime.fromisoformat(first_at)
+                stats["days_together"] = max(1, (datetime.now(timezone.utc) - first).days)
+
+        # Count consumer-visible memories from wave 1 results (indices 5-9)
+        visible_count = 0
+        for idx in range(5, 5 + len(_consumer_ns)):
+            entries = wave1[idx]
+            if isinstance(entries, Exception):
+                continue
+            for e in entries:
+                val = (e.get("value") or "").strip()
+                if val.startswith(("{", "[", '"{')) or "failed LLM review" in val:
+                    continue
+                visible_count += 1
+        stats["memories"] = visible_count
+
+        if not isinstance(rel, Exception):
             stats["relationship_level"] = rel["level"]
             stats["relationship_label"] = rel["label"]
-        except Exception as e:
-            logger.debug("Failed to compute relationship level for greeting: %s", e)
 
-        # Emotional context for greeting (gated by relationship level)
+        # ── Emotional context (depends on relationship level) ──────
         emotional_greeting_context = ""
         try:
             emo_ctx = await self._orch._emotions.get_emotional_context(

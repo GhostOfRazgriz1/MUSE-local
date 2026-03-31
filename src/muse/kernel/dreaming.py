@@ -110,6 +110,8 @@ class DreamingManager:
         self, session_id: str, history: list[dict],
     ) -> None:
         """Extract durable knowledge from the conversation and persist it."""
+        import asyncio as _aio
+        import json, re
 
         # Build the conversation text
         conv_text = "\n".join(
@@ -118,8 +120,9 @@ class DreamingManager:
 
         model = await self._orch._model_router.resolve_model()
 
-        # ── Step 1: Extract structured memories via LLM ─────────
-        result = await self._orch._provider.complete(
+        # ── Run memory extraction + session summary in parallel ──
+        # Both read conv_text independently; no dependency between them.
+        extract_task = self._orch._provider.complete(
             model=model,
             messages=[
                 {"role": "system", "content": (
@@ -153,8 +156,23 @@ class DreamingManager:
             max_tokens=1500,
         )
 
-        # Parse the memories
-        import json, re
+        summary_task = self._orch._provider.complete(
+            model=model,
+            messages=[
+                {"role": "system", "content": (
+                    "Write a brief summary of this conversation session "
+                    "(2-3 sentences). Focus on what was accomplished and "
+                    "any important decisions made. This will be used to "
+                    "provide context in future sessions."
+                )},
+                {"role": "user", "content": conv_text},
+            ],
+            max_tokens=200,
+        )
+
+        result, summary_result = await _aio.gather(extract_task, summary_task)
+
+        # ── Parse extracted memories ───────────────────────────
         raw = result.text.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```\w*\n?", "", raw)
@@ -166,12 +184,12 @@ class DreamingManager:
             logger.warning("Consolidation LLM returned invalid JSON: %s", raw[:200])
             get_tracer().error("dreaming", "Invalid JSON from consolidation LLM",
                                response=raw[:300])
-            return
+            memories = []
 
         if not isinstance(memories, list):
             memories = memories.get("memories", []) if isinstance(memories, dict) else []
 
-        # ── Step 2: Store via demotion pipeline ─────────────────
+        # ── Store memories + summary in parallel ───────────────
         valid_namespaces = {"_profile", "_project", "_facts", "_emotions"}
         facts = []
         for mem in memories:
@@ -186,40 +204,32 @@ class DreamingManager:
                 "namespace": ns,
             })
 
-        if not facts:
-            get_tracer().event("dreaming", "no_memories",
-                               session_id=session_id)
-            return
-
-        inserted = await self._orch._demotion.demote_to_cache(facts)
-        await self._orch._demotion.flush_cache_to_disk()
-
-        # ── Step 3: Save a session summary to _conversation ─────
-        summary_result = await self._orch._provider.complete(
-            model=model,
-            messages=[
-                {"role": "system", "content": (
-                    "Write a brief summary of this conversation session "
-                    "(2-3 sentences). Focus on what was accomplished and "
-                    "any important decisions made. This will be used to "
-                    "provide context in future sessions."
-                )},
-                {"role": "user", "content": conv_text},
-            ],
-            max_tokens=200,
-        )
-
         session_summary = summary_result.text.strip()
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        await self._orch._memory_repo.put(
-            namespace="_conversation",
-            key=f"session_{timestamp}",
-            value=session_summary,
-            value_type="text",
-        )
 
-        # Also save a compaction checkpoint so the sliding-window summary
-        # is up-to-date when the session resumes.
+        # Run demotion + summary storage concurrently
+        async def _store_memories():
+            if facts:
+                inserted = await self._orch._demotion.demote_to_cache(facts)
+                await self._orch._demotion.flush_cache_to_disk()
+                return inserted
+            return []
+
+        async def _store_summary():
+            await self._orch._memory_repo.put(
+                namespace="_conversation",
+                key=f"session_{timestamp}",
+                value=session_summary,
+                value_type="text",
+            )
+
+        inserted_result, _ = await _aio.gather(_store_memories(), _store_summary())
+        inserted = inserted_result or []
+
+        if not facts:
+            get_tracer().event("dreaming", "no_memories", session_id=session_id)
+
+        # Save compaction checkpoint
         try:
             await self._orch._compaction._save_checkpoint_async()
         except Exception as exc:

@@ -19,8 +19,10 @@ Four relationship levels gate agent behavior:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -159,11 +161,17 @@ class EmotionTracker:
         # Running session state
         self._session_signals: list[EmotionalSignal] = []
         self._session_valence: float = 0.0  # running average
+        # Relationship score cache (TTL-based)
+        self._cached_score: dict | None = None
+        self._score_computed_at: float = 0.0
+        self._score_cache_ttl: float = 300.0  # 5 minutes
 
     def reset_session(self) -> None:
         """Clear session-level emotional state (called on new session)."""
         self._session_signals = []
         self._session_valence = 0.0
+        self._cached_score = None
+        self._score_computed_at = 0.0
 
     # ── Real-time detection ───────────────────────────────────────
 
@@ -300,54 +308,65 @@ class EmotionTracker:
     async def compute_relationship_score(self) -> dict:
         """Compute the relationship depth score from multiple signals.
 
+        Results are cached for ``_score_cache_ttl`` seconds (default 5 min)
+        to avoid redundant DB queries on every message.
+
         Returns:
-            level: int (1-4)
-            label: str
-            progress: float (0.0-1.0) — progress within current level
-            score: float (0.0-1.0) — raw composite score
-            capabilities: list[str] — unlocked at current level
+            level, label, progress, score, capabilities, next_capabilities
         """
-        # Signal 1: Breadth — how many namespaces have content
+        now = time.monotonic()
+        if self._cached_score and (now - self._score_computed_at) < self._score_cache_ttl:
+            return self._cached_score
+
+        # ── Fetch all signals in parallel ─────────────────────────
         breadth_ns = ["_profile", "_facts", "_project", "_emotions",
                        "_conversation", "_patterns"]
-        ns_with_content = 0
-        for ns in breadth_ns:
-            keys = await self._repo.list_keys(ns)
-            if keys:
-                ns_with_content += 1
-        breadth = ns_with_content / len(breadth_ns)  # 0.0 - 1.0
 
-        # Signal 2: Depth — personal/emotional content
-        profile_keys = await self._repo.list_keys("_profile")
-        emotion_keys = await self._repo.list_keys("_emotions")
-        # More personal info = deeper relationship
+        # All independent queries run concurrently.
+        ns_key_tasks = [self._repo.list_keys(ns) for ns in breadth_ns]
+        session_stats_task = self._session_repo.get_session_stats()
+        count_task = self._repo.count_entries()
+
+        results = await asyncio.gather(
+            *ns_key_tasks, session_stats_task, count_task,
+            return_exceptions=True,
+        )
+
+        # Unpack: first 6 = namespace key lists, then session_stats, then count
+        ns_keys = results[:len(breadth_ns)]
+        session_stats = results[len(breadth_ns)]
+        total_memories = results[len(breadth_ns) + 1]
+
+        # Signal 1: Breadth
+        ns_with_content = sum(
+            1 for keys in ns_keys
+            if not isinstance(keys, Exception) and keys
+        )
+        breadth = ns_with_content / len(breadth_ns)
+
+        # Signal 2: Depth — reuse the already-fetched profile and emotion keys
+        profile_keys = ns_keys[0] if not isinstance(ns_keys[0], Exception) else []
+        emotion_keys = ns_keys[3] if not isinstance(ns_keys[3], Exception) else []
         depth_score = min(1.0, (len(profile_keys) * 0.05) + (len(emotion_keys) * 0.1))
 
-        # Signal 3: Consistency — active days in last 30
-        try:
-            session_stats = await self._session_repo.get_session_stats()
+        # Signal 3: Consistency
+        consistency = 0.0
+        if not isinstance(session_stats, Exception):
             total_sessions = session_stats.get("session_count", 0)
             first_at = session_stats.get("first_session_at")
             if first_at:
                 first = datetime.fromisoformat(first_at)
                 days_active = max(1, (datetime.now(timezone.utc) - first).days)
-                # Ratio of sessions to days, capped at 1.0
                 consistency = min(1.0, total_sessions / max(days_active, 1))
-            else:
-                consistency = 0.0
-        except Exception:
-            consistency = 0.0
 
-        # Signal 4: Trust — memory count as proxy
-        # (permissions are session-scoped; total memories is a better
-        #  long-term trust indicator)
-        total_memories = await self._repo.count_entries()
-        trust = min(1.0, total_memories / 50)  # 50 memories = full trust signal
+        # Signal 4: Trust
+        mem_count = total_memories if not isinstance(total_memories, Exception) else 0
+        trust = min(1.0, mem_count / 50)
 
-        # Composite score (weighted)
+        # Composite score
         score = (
             0.25 * breadth
-            + 0.30 * depth
+            + 0.30 * depth_score
             + 0.20 * consistency
             + 0.25 * trust
         )
@@ -366,19 +385,18 @@ class EmotionTracker:
             range_size = next_lvl["threshold"] - current_level["threshold"]
             progress = (score - current_level["threshold"]) / range_size if range_size > 0 else 1.0
         else:
-            progress = 1.0  # max level
+            progress = 1.0
 
         caps = []
         for lvl in RELATIONSHIP_LEVELS:
             if lvl["level"] <= current_level["level"]:
                 caps.extend(LEVEL_CAPABILITIES.get(lvl["level"], []))
 
-        # Next unlocks
         next_caps = []
         if next_levels:
             next_caps = LEVEL_CAPABILITIES.get(next_levels[0]["level"], [])
 
-        return {
+        result = {
             "level": current_level["level"],
             "label": current_level["label"],
             "progress": round(min(1.0, max(0.0, progress)), 2),
@@ -386,6 +404,10 @@ class EmotionTracker:
             "capabilities": caps,
             "next_capabilities": next_caps,
         }
+
+        self._cached_score = result
+        self._score_computed_at = now
+        return result
 
     # ── Context for LLM ──────────────────────────────────────────
 

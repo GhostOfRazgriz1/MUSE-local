@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { IconX, IconTrash, IconPlus, IconBrain, IconChevronDown, IconChevronRight, IconCheck } from "./Icons";
 import { apiFetch } from "../hooks/useApiToken";
 
@@ -67,7 +67,15 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ onClose }) => {
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchMemories = useCallback(async () => {
+  const lastFetchRef = useRef<number>(0);
+
+  const fetchMemories = useCallback(async (force = false) => {
+    // Skip if fetched within the last 60 seconds (unless forced by add/delete)
+    const now = Date.now();
+    if (!force && lastFetchRef.current && now - lastFetchRef.current < 60_000 && items.length > 0) {
+      setLoading(false);
+      return;
+    }
     try {
       const [memRes, statsRes] = await Promise.all([
         apiFetch("/api/memories"),
@@ -82,12 +90,13 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ onClose }) => {
         const stats = await statsRes.json();
         if (stats.relationship) setRelationship(stats.relationship);
       }
+      lastFetchRef.current = Date.now();
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [items.length]);
 
   useEffect(() => {
     fetchMemories();
@@ -133,7 +142,7 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ onClose }) => {
       if (res.ok) {
         setAddingValue("");
         setAddingOpen(false);
-        fetchMemories();
+        fetchMemories(true);
       }
     } catch {
       // ignore
@@ -152,22 +161,23 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ onClose }) => {
   const namespaces = Object.keys(groups).sort(nsSort);
   const totalCount = items.length;
 
-  // Build timeline: all items sorted by created_at desc.
-  const timeline = [...items].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
-
-  // Group timeline by date label.
-  const timelineGroups: { label: string; items: MemoryItem[] }[] = [];
-  for (const item of timeline) {
-    const label = friendlyDate(item.created_at);
-    const last = timelineGroups[timelineGroups.length - 1];
-    if (last && last.label === label) {
-      last.items.push(item);
-    } else {
-      timelineGroups.push({ label, items: [item] });
+  // Memoize timeline sort + grouping — only recomputes when items change.
+  const timelineGroups = useMemo(() => {
+    const sorted = [...items].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    const groups: { label: string; items: MemoryItem[] }[] = [];
+    for (const item of sorted) {
+      const label = friendlyDate(item.created_at);
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) {
+        last.items.push(item);
+      } else {
+        groups.push({ label, items: [item] });
+      }
     }
-  }
+    return groups;
+  }, [items]);
 
   return (
     <div className="memory-panel">

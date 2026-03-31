@@ -10,6 +10,7 @@ memories are immediately available.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timezone
 
@@ -53,29 +54,21 @@ class PromotionManager:
     async def prewarm_cache(self) -> None:
         """Load high-value entries from disk into the cache.
 
-        Loads:
+        Loads (in parallel):
         1. User profile entries (``_profile`` namespace).
         2. Recent conversation summaries.
         3. Top-N entries by access frequency.
         """
-        # 1. User profile — bulk fetch instead of key-by-key
-        profile_entries = await self._repo.get_by_relevance(
-            namespace="_profile", limit=200, min_score=0.0,
+        profile_entries, conv_entries, top_entries = await asyncio.gather(
+            self._repo.get_by_relevance(namespace="_profile", limit=200, min_score=0.0),
+            self._repo.get_by_relevance(namespace="_conversation", limit=200, min_score=0.0),
+            self._repo.get_top_by_frequency(limit=self._config.prewarm_top_n),
         )
+
         for entry in profile_entries:
             self._cache.put("_profile", entry.get("key", ""), entry)
-
-        # 2. Recent conversation summaries — bulk fetch
-        conv_entries = await self._repo.get_by_relevance(
-            namespace="_conversation", limit=200, min_score=0.0,
-        )
         for entry in conv_entries:
             self._cache.put("_conversation", entry.get("key", ""), entry)
-
-        # 3. Top-N by frequency
-        top_entries = await self._repo.get_top_by_frequency(
-            limit=self._config.prewarm_top_n,
-        )
         for entry in top_entries:
             ns = entry.get("namespace", "default")
             key = entry.get("key", "")

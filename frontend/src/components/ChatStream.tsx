@@ -279,25 +279,104 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
     }
   }, [events.length]);
 
-  // Process new events into the message list
+  // Process new events into the message list.
+  // Side effects (thinking, activeSkills, planActive) are collected first,
+  // then applied in a single batch to avoid extra renders.
   useEffect(() => {
     if (events.length <= processedCountRef.current) return;
 
     const newEvents = events.slice(processedCountRef.current);
     processedCountRef.current = events.length;
 
+    // ── Collect side effects outside the state updater ──────
+    let nextThinking: boolean | null = null;
+    const skillsStarted: { skill: string; taskId: string }[] = [];
+    const skillsEnded: string[] = [];
+    let clearAllSkills = false;
+    let nextPlanActive: boolean | null = null;
+
+    for (const evt of newEvents) {
+      if (evt.type === "thinking") {
+        nextThinking = true;
+      }
+      if (evt.type === "response_chunk") {
+        nextThinking = false;
+      }
+      if (evt.type === "response" || evt.type === "error" || evt.type === "multi_task_completed") {
+        nextThinking = false;
+      }
+      if (evt.type === "task_started" && !("sub_task_index" in evt)) {
+        skillsStarted.push({ skill: evt.skill_name, taskId: evt.task_id });
+      }
+      if (evt.type === "task_completed" || evt.type === "task_failed") {
+        skillsEnded.push(evt.task_id);
+      }
+      if (evt.type === "multi_task_completed") {
+        clearAllSkills = true;
+        nextPlanActive = false;
+      }
+      if (evt.type === "multi_task_started" ||
+          (evt.type === "status" && evt.content?.includes("Step "))) {
+        nextPlanActive = true;
+      }
+    }
+
+    // Apply side effects in one batch
+    if (nextThinking !== null) setIsThinking(nextThinking);
+    if (clearAllSkills) {
+      setActiveSkills([]);
+    } else if (skillsStarted.length > 0 || skillsEnded.length > 0) {
+      setActiveSkills((prev) => {
+        let next = skillsEnded.length > 0
+          ? prev.filter((s) => !skillsEnded.includes(s.taskId))
+          : prev;
+        return skillsStarted.length > 0 ? [...next, ...skillsStarted] : next;
+      });
+    }
+    if (nextPlanActive !== null) setPlanActive(nextPlanActive);
+
+    // ── Update messages — single array copy ────────────────
     setMessages((prev) => {
+      // Fast path: if all new events are chunks, just update the tail
+      const allChunks = newEvents.every(
+        (e) => e.type === "response_chunk" || e.type === "thinking"
+      );
+
+      if (allChunks) {
+        // Accumulate all chunk deltas into one string
+        let combinedDelta = "";
+        for (const evt of newEvents) {
+          if (evt.type === "response_chunk") combinedDelta += evt.delta;
+        }
+        if (!combinedDelta) return prev;
+
+        const last = prev[prev.length - 1];
+        if (last && "type" in last && last.type === "response_chunk") {
+          const accumulated = (last.content || "") + combinedDelta;
+          // Replace only the last element — no full copy
+          const updated = prev.slice();
+          updated[updated.length - 1] = {
+            ...last,
+            delta: accumulated,
+            content: accumulated,
+          };
+          return updated;
+        }
+        // First chunk — append
+        return [...prev, {
+          type: "response_chunk" as const,
+          delta: combinedDelta,
+          content: combinedDelta,
+        }];
+      }
+
+      // General path: process mixed events
       let updated = [...prev];
 
       for (const evt of newEvents) {
-        if (evt.type === "thinking") {
-          setIsThinking(true);
-          continue;
-        }
+        if (evt.type === "thinking") continue;
 
-        // Streaming: accumulate chunks into the last message
         if (evt.type === "response_chunk") {
-          setIsThinking(false);
           const last = updated[updated.length - 1];
           if (last && "type" in last && last.type === "response_chunk") {
             const accumulated = (last.content || "") + evt.delta;
@@ -324,42 +403,6 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
             updated[lastIdx] = evt;
             continue;
           }
-        }
-
-        if (evt.type === "task_started" && !("sub_task_index" in evt)) {
-          setActiveSkills((prev) => [
-            ...prev,
-            { skill: evt.skill_name, taskId: evt.task_id },
-          ]);
-        }
-
-        if (
-          evt.type === "task_completed" ||
-          evt.type === "task_failed"
-        ) {
-          setActiveSkills((prev) =>
-            prev.filter((s) => s.taskId !== evt.task_id)
-          );
-        }
-
-        if (evt.type === "multi_task_completed") {
-          setActiveSkills([]);
-          setPlanActive(false);
-        }
-
-        // Plan/multi-task started — enable steering
-        if (evt.type === "multi_task_started" ||
-            (evt.type === "status" && evt.content?.includes("Step "))) {
-          setPlanActive(true);
-        }
-
-        // Terminal events clear thinking
-        if (
-          evt.type === "response" ||
-          evt.type === "error" ||
-          evt.type === "multi_task_completed"
-        ) {
-          setIsThinking(false);
         }
 
         if (
@@ -763,7 +806,9 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                 case "multi_task_started":
                   return wrapMsg(
                     <div className="task-notification started">
-                      Running {evt.sub_task_count} tasks...
+                      {evt.sub_task_count <= 1
+                        ? "Working on your request..."
+                        : `Running ${evt.sub_task_count} tasks...`}
                     </div>
                   );
 

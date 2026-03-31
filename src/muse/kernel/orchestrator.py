@@ -943,15 +943,16 @@ class Orchestrator:
             if intent.skill_id and not intent.skill_id.startswith("mcp:"):
                 intent = await self._apply_skill_preference(intent)
 
-            # Pre-compute embedding for delegated tasks so it can be reused
-            # after permission approval without a redundant inference call.
-            precomputed_embedding = None
-            if intent.mode in (ExecutionMode.DELEGATED, ExecutionMode.MULTI_DELEGATED):
-                precomputed_embedding = await self._embeddings.embed_async(user_message)
+            # Pre-compute embedding once — reused across inline context
+            # assembly, delegated task setup, and permission resume.
+            precomputed_embedding = await self._embeddings.embed_async(user_message)
 
             if intent.mode == ExecutionMode.INLINE:
                 await self._patterns.record("inline", instruction=user_message)
-                async for event in self._handle_inline(user_message, intent, history_snapshot):
+                async for event in self._handle_inline(
+                    user_message, intent, history_snapshot,
+                    precomputed_embedding=precomputed_embedding,
+                ):
                     yield event
             elif intent.mode == ExecutionMode.DELEGATED:
                 if intent.skill_id == IDENTITY_SKILL_ID:
@@ -970,13 +971,32 @@ class Orchestrator:
                     ):
                         yield event
             elif intent.mode == ExecutionMode.MULTI_DELEGATED:
-                await self._patterns.record(
-                    "multi_task", instruction=user_message,
-                    skill_id=",".join(intent.skill_ids),
-                )
-                self._last_delegated_message = user_message
-                async for event in self._handle_multi_delegated(user_message, intent):
-                    yield event
+                # If the classifier decomposed into a single sub-task,
+                # downgrade to a simple delegated call to avoid the
+                # misleading "Running 2 tasks" framing.
+                if len(intent.sub_tasks) == 1:
+                    st = intent.sub_tasks[0]
+                    intent.skill_id = st.skill_id
+                    intent.action = getattr(st, "action", None)
+                    intent.mode = ExecutionMode.DELEGATED
+                    await self._patterns.record(
+                        "skill_use", skill_id=intent.skill_id,
+                        action=intent.action, instruction=user_message,
+                    )
+                    self._last_delegated_message = user_message
+                    async for event in self._handle_delegated(
+                        user_message, intent, history_snapshot,
+                        precomputed_embedding=precomputed_embedding,
+                    ):
+                        yield event
+                else:
+                    await self._patterns.record(
+                        "multi_task", instruction=user_message,
+                        skill_id=",".join(intent.skill_ids),
+                    )
+                    self._last_delegated_message = user_message
+                    async for event in self._handle_multi_delegated(user_message, intent):
+                        yield event
             elif intent.mode == ExecutionMode.GOAL:
                 await self._patterns.record("goal", instruction=user_message)
                 self._last_delegated_message = user_message
@@ -1021,11 +1041,12 @@ class Orchestrator:
     async def _handle_inline(
         self, user_message: str, intent,
         history_snapshot: list[dict] | None = None,
+        precomputed_embedding: list[float] | None = None,
     ) -> AsyncIterator[dict]:
         """Handle a message directly via LLM call."""
         yield {"type": "thinking", "content": "Thinking..."}
 
-        query_embedding = await self._embeddings.embed_async(user_message)
+        query_embedding = precomputed_embedding or await self._embeddings.embed_async(user_message)
 
         # Promote relevant data from disk → cache
         await self._promotion.promote_disk_to_cache(query_embedding)

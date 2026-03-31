@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { ChatStream } from "./components/ChatStream";
 import { TaskTray } from "./components/TaskTray";
@@ -110,7 +110,7 @@ function App() {
     return () => window.removeEventListener("mousedown", onClick);
   }, [taskPopoverOpen]);
 
-  const sessionUsage: SessionUsage = (() => {
+  const sessionUsage: SessionUsage = useMemo(() => {
     let tokens_in = 0, tokens_out = 0;
     for (const msg of historyMessages) {
       if ("type" in msg && msg.type === "response") {
@@ -125,16 +125,16 @@ function App() {
       }
     }
     return { tokens_in, tokens_out };
-  })();
+  }, [historyMessages, events]);
 
-  const runningTaskCount = (() => {
+  const runningTaskCount = useMemo(() => {
     const started = new Set<string>();
     for (const evt of events) {
       if (evt.type === "task_started") started.add(evt.task_id);
       if (evt.type === "task_completed" || evt.type === "task_failed") started.delete(evt.task_id);
     }
     return started.size;
-  })();
+  }, [events]);
 
   const handlePermissionRespond = useCallback(
     (requestId: string, allow: boolean, mode?: ApprovalMode) => {
