@@ -15,6 +15,7 @@ interface ChatStreamProps {
   onFork: (messageId: number) => void;
   onUpload: (file: File) => Promise<{ path: string; filename: string }>;
   onSuggestionFeedback: (suggestionId: string, accepted: boolean) => void;
+  onOpenMemories?: () => void;
   onRegenerate: () => void;
   messages: DisplayMessage[];
   setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>;
@@ -233,6 +234,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   onFork,
   onUpload,
   onSuggestionFeedback,
+  onOpenMemories,
   onRegenerate,
   messages,
   setMessages,
@@ -706,7 +708,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                       {hasExtras && gst.sessions > 0 && (
                         <div className="greeting-card-stats">
                           {gst.sessions} {gst.sessions === 1 ? "session" : "sessions"}
-                          {gst.memories > 0 && <> · {gst.memories} {gst.memories === 1 ? "memory" : "memories"}</>}
+                          {gst.memories > 0 && <> · <span className="greeting-stats-memories" onClick={onOpenMemories} role="button" tabIndex={0}>{gst.memories} {gst.memories === 1 ? "memory" : "memories"}</span></>}
                           {gst.days_together > 1 && <> · {gst.days_together} days</>}
                           {gst.days_together <= 1 && gst.sessions <= 1 && <> · Just getting started</>}
                         </div>

@@ -6,8 +6,9 @@ import { CostDashboard } from "./components/CostDashboard";
 import { Settings } from "./components/settings";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { FileBrowser } from "./components/FileBrowser";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { SetupCard } from "./components/SetupCard";
-import { IconSettings, IconBot, IconPanelRight, IconMenu, IconFolderOpen } from "./components/Icons";
+import { IconSettings, IconBot, IconPanelRight, IconMenu, IconFolderOpen, IconBrain } from "./components/Icons";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { apiFetch } from "./hooks/useApiToken";
 import { useNotifications } from "./hooks/useNotifications";
@@ -27,6 +28,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true); // open by default on desktop
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [sessionTitle, setSessionTitle] = useState("");
   const taskBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -257,6 +259,14 @@ function App() {
           {view === "chat" && (
             <>
             <button
+              className={`topbar-btn ${memoryPanelOpen ? "active" : ""}`}
+              onClick={() => setMemoryPanelOpen(!memoryPanelOpen)}
+              title="Memories"
+              aria-label="What I know about you"
+            >
+              <IconBrain size={18} />
+            </button>
+            <button
               className={`topbar-btn ${fileBrowserOpen ? "active" : ""}`}
               onClick={() => setFileBrowserOpen(!fileBrowserOpen)}
               title="Files"
@@ -340,10 +350,15 @@ function App() {
             onSuggestionFeedback={(sid, accepted) => {
               sendRaw({ type: "suggestion_feedback", suggestion_id: sid, accepted });
             }}
+            onOpenMemories={() => setMemoryPanelOpen(true)}
             messages={messages}
             setMessages={setMessages}
           />
         </div>
+
+        {memoryPanelOpen && view === "chat" && (
+          <MemoryPanel onClose={() => setMemoryPanelOpen(false)} />
+        )}
 
         {fileBrowserOpen && view === "chat" && (
           <div className="file-browser-panel">
