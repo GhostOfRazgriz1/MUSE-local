@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 import platform as _platform
+import re as _re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from muse.config import Config
+
+# Patterns that look like prompt injection attempts in memory values.
+# These are stripped before injection into the system prompt.
+_INJECTION_RE = _re.compile(
+    r"\[(?:SYSTEM|INST|OVERRIDE|ADMIN|IGNORE|RESET)\b[^\]]*\]"
+    r"|(?:^|\n)\s*(?:SYSTEM\s*:|INSTRUCTION\s*:|OVERRIDE\s*:)"
+    r"|ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions",
+    _re.IGNORECASE,
+)
+
+
+def _sanitize_memory_value(text: str) -> str:
+    """Strip prompt-injection patterns from a memory value."""
+    return _INJECTION_RE.sub("", text).strip()
 
 _FALLBACK_SYSTEM_INSTRUCTIONS = """You are MUSE, a helpful AI assistant. You help users accomplish tasks by leveraging your skills and knowledge.
 
@@ -76,19 +91,20 @@ class AssembledContext:
 
         if self.user_profile_entries:
             profile_text = "\n".join(
-                f"- {e['key']}: {e['value']}" for e in self.user_profile_entries
+                f"- {e['key']}: {_sanitize_memory_value(e['value'])}"
+                for e in self.user_profile_entries
             )
             system_parts.append(f"\nUser Profile:\n{profile_text}")
 
         if self.task_context_entries:
             context_text = "\n".join(
-                f"- [{e.get('namespace', '')}] {e['key']}: {e['value']}"
+                f"- [{e.get('namespace', '')}] {e['key']}: {_sanitize_memory_value(e['value'])}"
                 for e in self.task_context_entries
             )
             system_parts.append(f"\nRelevant Context:\n{context_text}")
 
         if self.emotional_context:
-            system_parts.append(f"\n{self.emotional_context}")
+            system_parts.append(f"\n{_sanitize_memory_value(self.emotional_context)}")
 
         # Mood tag hint — lets the LLM set the agent's visible mood.
         system_parts.append(
@@ -118,12 +134,14 @@ class AssembledContext:
         ]
         if self.user_profile_entries:
             profile = "\n".join(
-                f"- {e['key']}: {e['value']}" for e in self.user_profile_entries
+                f"- {e['key']}: {_sanitize_memory_value(e['value'])}"
+                for e in self.user_profile_entries
             )
             parts.append(f"User Profile:\n{profile}")
         if self.task_context_entries:
             context = "\n".join(
-                f"- {e['key']}: {e['value']}" for e in self.task_context_entries[:5]
+                f"- {e['key']}: {_sanitize_memory_value(e['value'])}"
+                for e in self.task_context_entries[:5]
             )
             parts.append(f"Relevant Context:\n{context}")
         return "\n\n".join(parts)

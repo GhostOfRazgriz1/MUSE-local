@@ -192,6 +192,11 @@ async def upload_file(file: UploadFile):
         dest = upload_dir / f"{stem}_{counter}{suffix}"
         counter += 1
 
+    # Verify destination is inside the upload directory (no symlink escape)
+    resolved = dest.resolve()
+    if not str(resolved).startswith(str(upload_dir.resolve())):
+        raise HTTPException(400, "Invalid upload destination")
+
     # Read with size limit to prevent OOM
     chunks: list[bytes] = []
     total = 0
@@ -243,9 +248,11 @@ async def browse_directory(
     """
     if path:
         target = _validate_path(path)
-        # Safety: only allow browsing within the user's home directory
+        # Safety: only allow browsing within the user's home directory.
+        # Use resolve() to follow symlinks before the check.
         home = Path.home().resolve()
-        if not str(target).startswith(str(home)):
+        resolved_target = target.resolve()
+        if not str(resolved_target).startswith(str(home)):
             raise HTTPException(403, "Cannot browse outside home directory")
     else:
         target = await _get_workspace()

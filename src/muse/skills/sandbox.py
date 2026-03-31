@@ -707,6 +707,11 @@ class LocalBridge:
                         return
             except Exception as e:
                 logger.warning("Permission check for skill invoke failed: %s", e)
+                await self._pending_response.put(_Response(
+                    success=False, result=None,
+                    error=f"Permission check failed for invoke: {e}",
+                ))
+                return
 
             get_tracer().event("bridge", "skill_invoke",
                                task_id=self._task_id,

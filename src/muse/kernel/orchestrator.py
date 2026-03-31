@@ -886,6 +886,7 @@ class Orchestrator:
 
         # Lightweight emotion analysis (no LLM call — just pattern matching)
         # Also sets the agent's visible mood based on the user's emotional signal.
+        _EMOTIONAL_MOODS = {"excited", "concerned", "curious", "amused"}
         try:
             signal = self._emotions.analyze_message(user_message)
             if signal:
@@ -901,13 +902,18 @@ class Orchestrator:
                 agent_mood = _EMOTION_TO_MOOD.get(signal.emotion)
                 if agent_mood:
                     await self.set_mood(agent_mood, force=True)
-                else:
-                    await self.set_mood("neutral", force=True)
+                elif self._mood not in _EMOTIONAL_MOODS:
+                    # Don't wipe an existing emotional mood for a mild signal
+                    await self.set_mood("thinking", force=True)
             else:
-                await self.set_mood("thinking", force=True)
+                # Only set "thinking" if we're not already in an emotional mood
+                # from a recent message — let emotional moods persist naturally.
+                if self._mood not in _EMOTIONAL_MOODS:
+                    await self.set_mood("thinking", force=True)
         except Exception as e:
             logger.debug("Emotion analysis skipped: %s", e)
-            await self.set_mood("thinking", force=True)
+            if self._mood not in _EMOTIONAL_MOODS:
+                await self.set_mood("thinking", force=True)
 
         try:
             _t = get_tracer()
@@ -2343,7 +2349,9 @@ class Orchestrator:
                     tokens_in=completed_task.tokens_in,
                     tokens_out=completed_task.tokens_out,
                 ))
-                await self.set_mood("neutral", force=True)
+                # Revert from "working" but preserve emotional moods.
+                if self._mood == "working":
+                    await self.set_mood("neutral", force=True)
             else:
                 error_msg = completed_task.error if completed_task else "Task failed"
                 _t.task_complete(task.id, skill_id, "failed", error=error_msg)
@@ -2352,7 +2360,8 @@ class Orchestrator:
                     "task_id": task.id,
                     "error": error_msg,
                 }
-                await self.set_mood("neutral", force=True)
+                if self._mood == "working":
+                    await self.set_mood("neutral", force=True)
 
         except asyncio.TimeoutError:
             _t.task_complete(task.id, skill_id, "timeout")

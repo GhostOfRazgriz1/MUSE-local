@@ -301,14 +301,16 @@ class OAuthManager:
             logger.warning("Cannot refresh %s: missing refresh_token or client_id", credential_id)
             return None
 
+        provider = self._provider_for(credential_id)
+        if provider is None:
+            logger.warning("No provider for credential %s", credential_id)
+            return None
+
         # Load client_secret from user_settings (never from the token bundle)
         try:
             client_secret = await self._load_client_secret(provider.name)
         except ValueError:
             logger.warning("Cannot refresh %s: no client_secret in settings", credential_id)
-            return None
-        if provider is None:
-            logger.warning("No provider for credential %s", credential_id)
             return None
 
         try:

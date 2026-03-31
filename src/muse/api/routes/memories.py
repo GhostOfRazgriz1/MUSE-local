@@ -137,6 +137,8 @@ async def add_memory(body: dict):
         raise HTTPException(400, "value is required")
 
     namespace = body.get("namespace", "_profile").strip()
+    if namespace not in _CONSUMER_NS:
+        raise HTTPException(400, f"Cannot add to namespace: {namespace}")
     # Generate a stable key from the first ~60 chars of the value.
     key = value[:60].lower().replace(" ", "_").replace(".", "")
 
@@ -145,16 +147,30 @@ async def add_memory(body: dict):
     return _entry_to_item(entry)
 
 
+# Namespaces the user is allowed to delete from via the API.
+_DELETABLE_NS = {"_profile", "_facts", "_project", "_conversation", "_emotions"}
+
+
 @router.delete("/memories/{namespace}/{key:path}")
 async def delete_memory(namespace: str, key: str):
-    """Delete a single memory entry."""
+    """Delete a single memory entry (consumer namespaces only)."""
     orchestrator = get_orchestrator()
     if not orchestrator:
         raise HTTPException(503, "Orchestrator not ready")
+
+    if namespace not in _DELETABLE_NS:
+        raise HTTPException(403, "Cannot delete from this namespace")
 
     repo = orchestrator._memory_repo
     existing = await repo.get(namespace, key)
     if not existing:
         raise HTTPException(404, "Memory not found")
     await repo.delete(namespace, key)
+
+    # Invalidate relationship score cache since memory counts changed.
+    try:
+        orchestrator._emotions._cached_score = None
+    except AttributeError:
+        pass
+
     return {"ok": True}
