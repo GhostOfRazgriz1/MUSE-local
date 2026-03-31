@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -16,8 +17,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-# Default output directory for agent-created files and uploads
-DEFAULT_WORKSPACE = Path.home() / "Documents" / "MUSE"
+
+def _default_workspace() -> Path:
+    """Platform-appropriate default workspace directory."""
+    if os.name == "nt":
+        return Path.home() / "Documents" / "MUSE"
+    elif os.name == "posix" and hasattr(os, "uname") and os.uname().sysname == "Darwin":
+        return Path.home() / "Documents" / "MUSE"
+    else:
+        docs = os.environ.get("XDG_DOCUMENTS_DIR", "")
+        if docs and Path(docs).is_dir():
+            return Path(docs) / "MUSE"
+        home_docs = Path.home() / "Documents"
+        if home_docs.is_dir():
+            return home_docs / "MUSE"
+        return Path.home() / "MUSE"
+
+
+DEFAULT_WORKSPACE = _default_workspace()
 
 
 async def _get_workspace() -> Path:

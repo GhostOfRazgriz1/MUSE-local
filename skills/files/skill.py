@@ -23,7 +23,28 @@ from typing import Any
 
 APPROVED_DIRS_KEY = "config.approved_directories"
 WORKSPACE_KEY = "config.workspace_directory"
-DEFAULT_WORKSPACE = str(Path.home() / "Documents" / "MUSE")
+
+
+def _default_workspace() -> str:
+    """Platform-appropriate default workspace directory."""
+    if os.name == "nt":
+        # Windows: ~/Documents/MUSE
+        return str(Path.home() / "Documents" / "MUSE")
+    elif os.name == "posix" and hasattr(os, "uname") and os.uname().sysname == "Darwin":
+        # macOS: ~/Documents/MUSE
+        return str(Path.home() / "Documents" / "MUSE")
+    else:
+        # Linux: respect XDG, fall back to ~/MUSE
+        docs = os.environ.get("XDG_DOCUMENTS_DIR", "")
+        if docs and Path(docs).is_dir():
+            return str(Path(docs) / "MUSE")
+        home_docs = Path.home() / "Documents"
+        if home_docs.is_dir():
+            return str(home_docs / "MUSE")
+        return str(Path.home() / "MUSE")
+
+
+DEFAULT_WORKSPACE = _default_workspace()
 
 MAX_FILE_SIZE = 2_000_000       # 2 MB read limit
 MAX_DISPLAY_CHARS = 12_000      # Truncation threshold for summaries
