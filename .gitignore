@@ -8,3 +8,4 @@ dist/
 *.db-journal
 _run_backend.cmd
 _run_frontend.cmd
+agent-os-architecture.docx
