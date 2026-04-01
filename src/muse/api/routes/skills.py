@@ -6,9 +6,9 @@ import logging
 
 from fastapi import APIRouter
 
-logger = logging.getLogger(__name__)
-
 from muse.api.app import get_orchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -161,7 +161,6 @@ async def uninstall_skill(skill_id: str):
 @router.get("/defaults")
 async def get_skill_defaults():
     """Return the user's preferred skill for each category."""
-    from datetime import datetime, timezone
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"defaults": {}}

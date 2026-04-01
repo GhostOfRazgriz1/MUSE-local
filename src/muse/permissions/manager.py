@@ -14,7 +14,6 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from muse.permissions.repository import PermissionRepository
 from muse.permissions.trust_budget import TrustBudgetManager

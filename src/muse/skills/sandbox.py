@@ -69,7 +69,6 @@ class SkillSandbox:
         else:
             coro = self._run_in_subprocess(task_id, skill_id, manifest, brief, permissions, config)
 
-        task = asyncio.current_task() or asyncio.ensure_future(coro)  # type: ignore[arg-type]
         try:
             await asyncio.wait_for(coro, timeout=timeout)
         except asyncio.TimeoutError:
@@ -391,7 +390,7 @@ class LocalBridge:
         # _profile — requires profile:read or profile:write permission
         if ns_lower == "_profile":
             if not self._orch:
-                return f"Access denied: no orchestrator reference"
+                return "Access denied: no orchestrator reference"
             # Check if the skill has been granted any profile permission
             for perm in ("profile:read", "profile:write"):
                 check = await self._orch._permissions.check_permission(self._skill_id, perm)
@@ -643,7 +642,7 @@ class LocalBridge:
                             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                                 await self._pending_response.put(_Response(
                                     success=False, status_code=0, headers={}, body="",
-                                    error=f"Requests to private/local addresses are blocked",
+                                    error="Requests to private/local addresses are blocked",
                                 ))
                                 return
                         # Pin the first resolved IP to prevent DNS rebinding

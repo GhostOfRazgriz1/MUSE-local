@@ -23,7 +23,7 @@ import aiosqlite
 
 from muse.config import Config
 from muse.db.session_repository import SessionRepository
-from muse.kernel.context_assembly import ContextAssembler, AssembledContext, load_identity, _sanitize_memory_value
+from muse.kernel.context_assembly import ContextAssembler, load_identity, _sanitize_memory_value
 from muse.kernel.identity_editor import (
     handle_identity_edit,
     SKILL_ID as IDENTITY_SKILL_ID,
@@ -893,12 +893,15 @@ class Orchestrator:
     async def handle_message(
         self, user_message: str,
         session_id: str | None = None,
+        history_snapshot: list[dict] | None = None,
     ) -> AsyncIterator[dict]:
         """Process a user message through the agent loop.
 
         *session_id* should be passed by the caller to pin persistence
-        to the correct session.  If omitted, falls back to
-        ``self._session_id`` (unsafe if sessions can switch mid-flight).
+        to the correct session.  *history_snapshot* should be a copy of
+        ``_conversation_history`` captured BEFORE the async task starts
+        (the generator is lazy — by the time it executes, the history
+        may belong to a different session).
         """
         # Onboarding intercept — first-session setup flow
         if self._onboarding and self._onboarding.is_active:
@@ -936,22 +939,24 @@ class Orchestrator:
         # session only if the caller didn't provide one.
         frozen_session_id = session_id or self._session_id
 
-        # Snapshot the conversation history BEFORE appending this message.
-        # When messages run concurrently, each one should only see the
-        # history that existed when the user sent it — not results from
-        # other concurrent tasks that complete mid-flight.
-        history_snapshot = list(self._conversation_history)
+        # Use the caller-provided history snapshot (captured before the
+        # async task started, immune to session switches).  Fall back to
+        # current history only if the caller didn't provide one.
+        if history_snapshot is None:
+            history_snapshot = list(self._conversation_history)
 
-        # Record in conversation history (in-memory immediately)
-        self._conversation_history.append({
+        # Append to the frozen snapshot — NOT self._conversation_history
+        # which may belong to a different session by execution time.
+        history_snapshot.append({
             "role": "user",
             "content": user_message,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        await self._compaction.incremental_compact(self._conversation_history)
 
-        # Persist to DB and auto-title as fire-and-forget (non-blocking)
-        asyncio.create_task(self._persist_message_and_title(user_message))
+        # Persist to DB using the frozen session_id
+        asyncio.create_task(self._persist_message_and_title(
+            user_message, session_id=frozen_session_id,
+        ))
 
         # Lightweight emotion analysis (no LLM call — just pattern matching)
         # Also sets the agent's visible mood based on the user's emotional signal.
@@ -1103,11 +1108,14 @@ class Orchestrator:
                 except Exception:
                     pass
 
-    async def _persist_message_and_title(self, user_message: str) -> None:
+    async def _persist_message_and_title(
+        self, user_message: str, session_id: str | None = None,
+    ) -> None:
         """Fire-and-forget: persist user message to DB and auto-title session."""
+        sid = session_id or self._session_id
         try:
             msg_id = await self._session_repo.add_message(
-                self._session_id, "user", user_message,
+                sid, "user", user_message,
                 event_type="user_message",
                 parent_id=self._branch_head_id,
             )
@@ -1115,12 +1123,12 @@ class Orchestrator:
             if self._branch_head_id is not None:
                 self._branch_head_id = msg_id
             new_title = await self._session_repo.auto_title_if_needed(
-                self._session_id, user_message
+                sid, user_message
             )
             if new_title:
                 await self._emit_event({
                     "type": "session_updated",
-                    "session_id": self._session_id,
+                    "session_id": sid,
                     "title": new_title,
                 })
         except Exception as e:
@@ -1222,13 +1230,16 @@ class Orchestrator:
         _t.llm_call("inline_response", model,
                      tokens_in=tokens_in, tokens_out=tokens_out)
 
-        # Record full response in conversation history
-        self._conversation_history.append({
-            "role": "assistant",
-            "content": response_text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        await self._compaction.incremental_compact(self._conversation_history)
+        # Only append to live conversation history if this task belongs
+        # to the current session.  Background tasks from other sessions
+        # must not pollute the active session's history.
+        if not session_id or session_id == self._session_id:
+            self._conversation_history.append({
+                "role": "assistant",
+                "content": response_text,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            await self._compaction.incremental_compact(self._conversation_history)
 
         asyncio.create_task(self._persist_and_demote(
             response_text, model,
@@ -2140,7 +2151,7 @@ class Orchestrator:
                 action=st.action,
                 pipeline_context=pipe_ctx,
                 record_history=False,
-                session_id=session_id,
+                session_id=self._session_id,
             ):
                 if event.get("type") == "response":
                     results[idx] = {"status": "completed", "summary": event.get("content", "")}
@@ -2463,7 +2474,7 @@ class Orchestrator:
                 if isinstance(result_data, dict) and result_data.get("install_skill"):
                     await self._install_authored_skill(result_data)
 
-                if record_history:
+                if record_history and (not session_id or session_id == self._session_id):
                     self._conversation_history.append({
                         "role": "assistant",
                         "content": summary,
@@ -2508,11 +2519,12 @@ class Orchestrator:
                 _sid = session_id or self._session_id
                 if record_history and _sid:
                     error_summary = f"Task failed ({manifest.name}): {error_msg}"
-                    self._conversation_history.append({
-                        "role": "assistant",
-                        "content": error_summary,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    if not session_id or session_id == self._session_id:
+                        self._conversation_history.append({
+                            "role": "assistant",
+                            "content": error_summary,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
                     try:
                         await self._session_repo.add_message(
                             _sid, "assistant", error_summary,
@@ -2553,7 +2565,6 @@ class Orchestrator:
         try:
             payload = result_data.get("payload", {})
             staged_path = payload.get("staged_path", "")
-            skill_name = payload.get("skill_name", "")
 
             if not staged_path:
                 logger.warning("Skill author returned install_skill but no staged_path")
@@ -2706,7 +2717,7 @@ class Orchestrator:
             })
             await self._compaction.incremental_compact(self._conversation_history)
 
-            yield {"type": "error", "content": f"Permission denied. Cannot execute the request."}
+            yield {"type": "error", "content": "Permission denied. Cannot execute the request."}
 
     # ------------------------------------------------------------------
     # User responses to skill questions (called from UI)
@@ -2724,6 +2735,24 @@ class Orchestrator:
 
     def unregister_bridge(self, task_id: str) -> None:
         self._active_bridges.pop(task_id, None)
+
+    def get_active_tasks_for_session(self, session_id: str) -> list[dict]:
+        """Return active task info for a session.
+
+        Called when a WS reconnects so the frontend can restore the
+        task counter / activity indicator.
+        """
+        results = []
+        for task in self._task_manager.get_active_tasks():
+            if task.session_id == session_id and task.status in ("running", "pending"):
+                results.append({
+                    "type": "task_started",
+                    "task_id": task.id,
+                    "skill": task.skill_id,
+                    "skill_name": task.skill_id,
+                    "message": f"Working on your request using {task.skill_id}...",
+                })
+        return results
 
     def get_pending_permissions_for_session(self, session_id: str) -> list[dict]:
         """Return pending permission request events for a session.
@@ -2827,8 +2856,21 @@ class Orchestrator:
         """
         sid = session_id or self._session_id
 
+        # Track active sessions for sidebar working indicators
+        if not hasattr(self, "_active_bg_sessions"):
+            self._active_bg_sessions: dict[str, int] = {}
+
+        if sid:
+            self._active_bg_sessions[sid] = self._active_bg_sessions.get(sid, 0) + 1
+
         async def _run():
             try:
+                # Notify all WS subscribers that this session is working
+                if sid:
+                    await self._emit_event({
+                        "type": "session_working",
+                        "session_id": sid,
+                    })
                 async for event in gen:
                     if isinstance(event, dict):
                         event["_session_id"] = sid
@@ -2842,6 +2884,15 @@ class Orchestrator:
                     "_session_id": sid,
                     "content": f"Something went wrong: {str(e)}",
                 })
+            finally:
+                if sid and sid in self._active_bg_sessions:
+                    self._active_bg_sessions[sid] -= 1
+                    if self._active_bg_sessions[sid] <= 0:
+                        del self._active_bg_sessions[sid]
+                        await self._emit_event({
+                            "type": "session_idle",
+                            "session_id": sid,
+                        })
 
         task = asyncio.create_task(_run())
         return task

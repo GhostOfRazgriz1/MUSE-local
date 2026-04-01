@@ -728,7 +728,7 @@ class ProactivityManager:
         else:
             time_of_day = "night"
 
-        time_str = now.strftime(f"%I:%M %p on %A, %B %d")
+        time_str = now.strftime("%I:%M %p on %A, %B %d")
         agent_name = self._orch._parse_identity_field("name") or "MUSE"
 
         # Scheduled task results

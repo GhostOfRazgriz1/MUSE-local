@@ -128,7 +128,7 @@ class APIGateway:
         # Block non-HTTP schemes (file://, gopher://, etc.)
         if parsed.scheme not in ("http", "https"):
             logger.warning("Skill %s blocked: unsupported scheme %s", skill_id, parsed.scheme)
-            return web.Response(status=400, text=f"Only http/https URLs are allowed")
+            return web.Response(status=400, text="Only http/https URLs are allowed")
 
         # Block requests to private/loopback/link-local IPs (SSRF protection)
         if domain and await self._resolves_to_private(domain):

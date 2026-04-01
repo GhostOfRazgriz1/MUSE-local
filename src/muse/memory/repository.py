@@ -6,7 +6,6 @@ conversation_archive tables via aiosqlite.
 
 from __future__ import annotations
 
-import json
 import struct
 from datetime import datetime, timezone
 from typing import Optional

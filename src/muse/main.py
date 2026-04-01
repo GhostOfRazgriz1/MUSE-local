@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import logging
-import sys
 from pathlib import Path
 
 from muse.config import Config
@@ -59,7 +57,6 @@ async def create_orchestrator(config: Config | None = None):
     permission_manager = PermissionManager(permission_repo, trust_budget)
 
     # LLM Providers
-    import os
     from muse.config import BUILTIN_PROVIDERS
     from muse.providers.openrouter import OpenRouterProvider
     from muse.providers.openai_compat import OpenAICompatibleProvider

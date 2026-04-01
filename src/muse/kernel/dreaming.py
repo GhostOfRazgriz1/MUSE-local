@@ -111,7 +111,8 @@ class DreamingManager:
     ) -> None:
         """Extract durable knowledge from the conversation and persist it."""
         import asyncio as _aio
-        import json, re
+        import json
+        import re
 
         # Build the conversation text
         conv_text = "\n".join(
@@ -254,7 +255,8 @@ class DreamingManager:
         "suggestions" key. The greeting system reads them to offer
         proactive actions when the user connects.
         """
-        import json, re
+        import json
+        import re
 
         pattern_summary = self._orch._patterns.summarize_recent()
         if "No recent activity" in pattern_summary:

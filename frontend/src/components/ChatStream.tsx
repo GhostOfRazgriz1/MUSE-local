@@ -10,6 +10,7 @@ interface ChatStreamProps {
   events: ChatEvent[];
   connected: boolean;
   agentMood?: string;
+  sessionWorking?: boolean;
   onSend: (content: string) => void;
   onPermissionRespond: (requestId: string, allow: boolean, mode?: ApprovalMode) => void;
   onUserResponse: (requestId: string, response: unknown) => void;
@@ -232,6 +233,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   events,
   connected,
   agentMood = "neutral",
+  sessionWorking = false,
   onSend,
   onPermissionRespond,
   onUserResponse,
@@ -281,6 +283,14 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
       setPlanActive(false);
     }
   }, [events.length]);
+
+  // Show thinking bubble if this session has active background work
+  // (e.g. user switched away and came back while a task is still running)
+  useEffect(() => {
+    if (sessionWorking && !isThinking) {
+      setIsThinking(true);
+    }
+  }, [sessionWorking]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Process new events into the message list.
   // Side effects (thinking, activeSkills, planActive) are collected first,
@@ -1105,7 +1115,9 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                       ? activeSkills.length === 1
                         ? `Using ${activeSkills[0].skill}`
                         : `Running ${activeSkills.length} tasks`
-                      : "Thinking"}
+                      : sessionWorking
+                        ? "Working..."
+                        : "Thinking"}
                   </div>
                   <div className="activity-dots">
                     <div className="thinking-dot" />

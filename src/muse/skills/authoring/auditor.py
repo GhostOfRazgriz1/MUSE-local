@@ -15,6 +15,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from muse.skills.authoring.sdk_contract import (
+    SDK_PERMISSION_MAP, VALID_PERMISSIONS,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,10 +113,6 @@ BANNED_CALLS: frozenset[str] = frozenset({
     "shutil.rmtree",
     "shutil.move",
 })
-
-from muse.skills.authoring.sdk_contract import (
-    SDK_PERMISSION_MAP, VALID_PERMISSIONS,
-)
 
 # Use the canonical permission map from the SDK contract
 _PERMISSION_SIGNALS = SDK_PERMISSION_MAP

@@ -13,17 +13,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
 from muse.skills.authoring.auditor import AuditVerdict, audit_skill
 from muse.skills.authoring.sdk_contract import (
-    SDK_API_REFERENCE, MANIFEST_RULES, CODE_RULES, VALID_PERMISSIONS,
+    SDK_API_REFERENCE, MANIFEST_RULES, CODE_RULES,
 )
 from muse.skills.authoring.staging import StagingArea
 from muse.skills.loader import SkillLoader
-from muse.skills.manifest import SkillManifest
 
 from muse_sdk.autonomous import FeedbackHistory
 
@@ -214,7 +212,7 @@ class SkillAuthor:
 
         # ── Step 4: Install ──────────────────────────────────────────
         staged_path = self._staging.get_path(skill_name)
-        installed_manifest = await self._loader.install(staged_path)
+        await self._loader.install(staged_path)
         self._staging.update_status(skill_name, "installed")
         self._staging.remove(skill_name)
 
@@ -357,7 +355,6 @@ class SkillAuthor:
         previous_manifest: dict[str, Any],
         feedback: FeedbackHistory,
     ) -> dict[str, Any]:
-        all_feedback = feedback.format_for_prompt()
         prompt = _build_manifest_retry_prompt(description, code, feedback.all_issues)
         raw = await self._llm_complete(
             prompt=prompt,

@@ -13,6 +13,7 @@ interface BranchTip {
 
 interface SessionSidebarProps {
   activeSessionId: string | null;
+  workingSessions?: Set<string>;
   onSelectSession: (sessionId: string | null) => void;
   onForkToBranch: (sessionId: string, messageId: number) => void;
   sessionUpdateTrigger: number;
@@ -37,6 +38,7 @@ function formatDate(iso: string): string {
 
 export const SessionSidebar: React.FC<SessionSidebarProps> = ({
   activeSessionId,
+  workingSessions,
   onSelectSession,
   onForkToBranch,
   sessionUpdateTrigger,
@@ -157,7 +159,11 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
               aria-current={activeSessionId === s.id ? "true" : undefined}
             >
               <span className="session-item-icon">
-                <IconMessageSquare size={15} />
+                {workingSessions?.has(s.id) ? (
+                  <span className="session-spinner" />
+                ) : (
+                  <IconMessageSquare size={15} />
+                )}
               </span>
               <div className="session-item-content">
                 <div className="session-item-title">{s.title}</div>

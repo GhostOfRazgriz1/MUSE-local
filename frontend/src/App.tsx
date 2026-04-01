@@ -33,6 +33,7 @@ function App() {
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const [sessionTitle, setSessionTitle] = useState("");
   const [agentMood, setAgentMood] = useState("resting");
+  const [workingSessions, setWorkingSessions] = useState<Set<string>>(new Set());
   const moodDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taskBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -68,6 +69,17 @@ function App() {
     if (last && last.type === "session_updated") {
       setSessionUpdateTrigger((n) => n + 1);
       setSessionTitle(last.title);
+    }
+    // Track which sessions have active background tasks
+    if (last && last.type === "session_working") {
+      setWorkingSessions((prev) => new Set(prev).add(last.session_id));
+    }
+    if (last && last.type === "session_idle") {
+      setWorkingSessions((prev) => {
+        const next = new Set(prev);
+        next.delete(last.session_id);
+        return next;
+      });
     }
     // Agent mood tracking with decay
     if (last && last.type === "mood_changed") {
@@ -170,6 +182,8 @@ function App() {
   }, [taskPopoverOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectSession = useCallback((id: string | null) => {
+    // Ignore clicks on the already-active session
+    if (id !== null && id === requestedSessionId) return;
     setRequestedSessionId(id);
     setMessages([]);
     setSessionTitle("");
@@ -177,7 +191,7 @@ function App() {
     // On mobile, close sidebar after selecting
     if (window.innerWidth < 768) setSidebarOpen(false);
     if (id === null) setReconnectToken((t) => t + 1);
-  }, []);
+  }, [requestedSessionId]);
 
   const handleFork = useCallback(async (messageId: number) => {
     if (!sessionId) return;
@@ -335,6 +349,7 @@ function App() {
         <div className={`sidebar-wrapper ${sidebarOpen ? "open" : ""}`}>
           <SessionSidebar
             activeSessionId={sessionId}
+            workingSessions={workingSessions}
             onSelectSession={handleSelectSession}
             onForkToBranch={handleForkToBranch}
             sessionUpdateTrigger={sessionUpdateTrigger}
@@ -350,6 +365,7 @@ function App() {
             events={events}
             connected={connected}
             agentMood={agentMood}
+            sessionWorking={!!(sessionId && workingSessions.has(sessionId))}
             onSend={sendMessage}
             onPermissionRespond={handlePermissionRespond}
             onUserResponse={(requestId, response) => {

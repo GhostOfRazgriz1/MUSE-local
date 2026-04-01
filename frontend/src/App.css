@@ -1152,6 +1152,21 @@ textarea:focus-visible {
 .session-item.active .session-item-icon {
   color: var(--accent);
 }
+.session-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: session-spin 0.8s linear infinite;
+}
+@keyframes session-spin {
+  to { transform: rotate(360deg); }
+}
+.session-item.active .session-spinner {
+  border-top-color: var(--accent);
+}
 
 .session-item-content {
   flex: 1;

@@ -379,7 +379,7 @@ class EmotionTracker:
                 current_level = lvl
 
         # Progress within level → next level
-        next_levels = [l for l in RELATIONSHIP_LEVELS if l["threshold"] > current_level["threshold"]]
+        next_levels = [lv for lv in RELATIONSHIP_LEVELS if lv["threshold"] > current_level["threshold"]]
         if next_levels:
             next_lvl = next_levels[0]
             range_size = next_lvl["threshold"] - current_level["threshold"]

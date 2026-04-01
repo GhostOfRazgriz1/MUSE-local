@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "muse-sdk"
 version = "0.1.0"
 description = "MUSE Skill SDK — build skills for MUSE"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -141,6 +140,11 @@ async def chat_websocket(
         for perm_event in orchestrator.get_pending_permissions_for_session(session_id):
             await websocket.send_json(perm_event)
 
+        # Re-emit active task_started events so the frontend restores
+        # the task counter and activity indicator.
+        for task_event in orchestrator.get_active_tasks_for_session(session_id):
+            await websocket.send_json(task_event)
+
     # Subscribe to orchestrator events
     event_queue = orchestrator.subscribe()
 
@@ -267,11 +271,17 @@ async def chat_websocket(
                     })
                     continue
                 await _ensure_session()
-                # Pass session_id into handle_message so it's captured
-                # BEFORE the generator starts (immune to session switches).
-                # Also pass to run_in_background for event tagging.
+                # Snapshot conversation history NOW — before the async task
+                # starts.  The generator is lazy; by the time it executes,
+                # the user may have switched sessions and the orchestrator's
+                # _conversation_history points to a different session.
+                history_snap = list(orchestrator._conversation_history)
                 orchestrator.run_in_background(
-                    orchestrator.handle_message(content, session_id=session_id),
+                    orchestrator.handle_message(
+                        content,
+                        session_id=session_id,
+                        history_snapshot=history_snap,
+                    ),
                     session_id=session_id,
                 )
 
@@ -279,8 +289,13 @@ async def chat_websocket(
                 last_user_msg = orchestrator.get_last_user_message()
                 if last_user_msg:
                     await _ensure_session()
+                    history_snap = list(orchestrator._conversation_history)
                     orchestrator.run_in_background(
-                        orchestrator.handle_message(last_user_msg, session_id=session_id),
+                        orchestrator.handle_message(
+                            last_user_msg,
+                            session_id=session_id,
+                            history_snapshot=history_snap,
+                        ),
                         session_id=session_id,
                     )
 

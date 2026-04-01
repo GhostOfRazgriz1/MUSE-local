@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from muse.skills.manifest import SkillManifest
 
 logger = logging.getLogger(__name__)
 

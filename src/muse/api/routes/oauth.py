@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import html
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from muse.api.app import get_orchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
