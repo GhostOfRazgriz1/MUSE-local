@@ -204,25 +204,204 @@ async def _open_file(ctx, path: str) -> dict:
     }
 
 
+# Common app name → launch command mappings per platform.
+# The LLM extracts names like "edge", "chrome", "spotify" — these
+# map to the actual executables or protocol URIs the OS understands.
+_WIN_APPS: dict[str, str] = {
+    "edge": "msedge", "microsoft edge": "msedge",
+    "chrome": "chrome", "google chrome": "chrome",
+    "firefox": "firefox", "mozilla firefox": "firefox",
+    "brave": "brave",
+    "notepad": "notepad", "wordpad": "wordpad",
+    "calculator": "calc", "calc": "calc",
+    "paint": "mspaint",
+    "explorer": "explorer", "file explorer": "explorer",
+    "cmd": "cmd", "command prompt": "cmd",
+    "powershell": "powershell", "terminal": "wt",
+    "windows terminal": "wt",
+    "spotify": "spotify", "discord": "discord",
+    "slack": "slack", "teams": "msteams", "microsoft teams": "msteams",
+    "vscode": "code", "visual studio code": "code", "vs code": "code",
+    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
+    "outlook": "outlook",
+    "task manager": "taskmgr", "settings": "ms-settings:",
+    "control panel": "control",
+    "snipping tool": "snippingtool",
+}
+
+_MAC_APPS: dict[str, str] = {
+    "safari": "Safari", "chrome": "Google Chrome",
+    "google chrome": "Google Chrome", "firefox": "Firefox",
+    "edge": "Microsoft Edge", "microsoft edge": "Microsoft Edge",
+    "brave": "Brave Browser",
+    "terminal": "Terminal", "iterm": "iTerm",
+    "finder": "Finder", "activity monitor": "Activity Monitor",
+    "spotify": "Spotify", "discord": "Discord",
+    "slack": "Slack", "teams": "Microsoft Teams",
+    "vscode": "Visual Studio Code", "visual studio code": "Visual Studio Code",
+    "vs code": "Visual Studio Code",
+    "word": "Microsoft Word", "excel": "Microsoft Excel",
+    "powerpoint": "Microsoft PowerPoint", "outlook": "Microsoft Outlook",
+    "notes": "Notes", "reminders": "Reminders",
+    "messages": "Messages", "facetime": "FaceTime",
+    "photos": "Photos", "music": "Music",
+    "system preferences": "System Preferences",
+    "system settings": "System Settings",
+}
+
+_LINUX_APPS: dict[str, str] = {
+    "chrome": "google-chrome", "google chrome": "google-chrome",
+    "firefox": "firefox", "edge": "microsoft-edge-stable",
+    "brave": "brave-browser",
+    "terminal": "gnome-terminal", "files": "nautilus",
+    "file manager": "nautilus",
+    "spotify": "spotify", "discord": "discord",
+    "slack": "slack", "vscode": "code", "vs code": "code",
+    "visual studio code": "code",
+    "calculator": "gnome-calculator",
+    "settings": "gnome-control-center",
+}
+
+
+def _resolve_app(app_name: str) -> str:
+    """Resolve a common app name to its platform-specific command.
+
+    1. Check the static mapping (instant, covers common apps).
+    2. Fall back to platform-native search (finds any installed app).
+    3. Return the original name if nothing found (let the OS try).
+    """
+    key = app_name.strip().lower()
+
+    # Fast path: static mapping
+    if sys.platform == "win32":
+        hit = _WIN_APPS.get(key)
+    elif sys.platform == "darwin":
+        hit = _MAC_APPS.get(key)
+    else:
+        hit = _LINUX_APPS.get(key)
+    if hit:
+        return hit
+
+    # Slow path: search the system for the app
+    found = _search_installed_app(key)
+    return found or app_name
+
+
+def _search_installed_app(name: str) -> str | None:
+    """Search the system for an installed application by name."""
+    try:
+        if sys.platform == "win32":
+            return _search_win(name)
+        elif sys.platform == "darwin":
+            return _search_mac(name)
+        else:
+            return _search_linux(name)
+    except Exception:
+        return None
+
+
+def _search_win(name: str) -> str | None:
+    """Search Windows Start Menu shortcuts for an app."""
+    import glob
+
+    # Search Start Menu directories for .lnk files matching the name
+    search_dirs = [
+        os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs"),
+        os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "Microsoft", "Windows", "Start Menu", "Programs"),
+    ]
+
+    exact: str | None = None
+    partial: str | None = None
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        for lnk in glob.glob(os.path.join(search_dir, "**", "*.lnk"), recursive=True):
+            lnk_name = Path(lnk).stem.lower()
+            # Skip "help", "uninstall", "readme" shortcuts
+            if any(skip in lnk_name for skip in ("help", "uninstall", "readme", "documentation")):
+                continue
+            if lnk_name == name:
+                return lnk  # exact match — use immediately
+            # Partial match: name must appear as a word boundary in the
+            # shortcut name to avoid "obs" matching "DirectVobSub".
+            if re.search(r'(?:^|[\s\-_])' + re.escape(name) + r'(?:[\s\-_]|$)', lnk_name):
+                if exact is None and lnk_name.startswith(name):
+                    exact = lnk
+                elif partial is None or len(lnk_name) < len(Path(partial).stem):
+                    partial = lnk
+
+    return exact or partial
+
+
+def _search_mac(name: str) -> str | None:
+    """Search macOS via Spotlight for an application."""
+    try:
+        result = subprocess.run(
+            ["mdfind", f"kMDItemKind == 'Application' && kMDItemDisplayName == '*{name}*'c"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            if line.endswith(".app"):
+                # Return just the app name (without .app) for 'open -a'
+                return Path(line).stem
+    except Exception:
+        pass
+    return None
+
+
+def _search_linux(name: str) -> str | None:
+    """Search Linux .desktop files for an application."""
+    desktop_dirs = [
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+        os.path.expanduser("~/.local/share/applications"),
+    ]
+
+    for d in desktop_dirs:
+        if not os.path.isdir(d):
+            continue
+        for fname in os.listdir(d):
+            if not fname.endswith(".desktop"):
+                continue
+            if name in fname.lower():
+                # Parse the Exec line from the .desktop file
+                try:
+                    with open(os.path.join(d, fname)) as f:
+                        for line in f:
+                            if line.startswith("Exec="):
+                                # Extract the command (before any %U, %F args)
+                                cmd = line[5:].strip().split()[0]
+                                return cmd
+                except Exception:
+                    continue
+    return None
+
+
 async def _open_app(ctx, app_name: str) -> dict:
     """Open an application by name."""
     if not await _check_and_approve(ctx, "app", app_name.lower(), f"opening {app_name}"):
         return _err(f"Opening {app_name} was denied.")
 
+    resolved = _resolve_app(app_name)
+
     try:
         if sys.platform == "win32":
-            subprocess.Popen(["start", "", app_name], shell=True)
+            if resolved.endswith(".lnk"):
+                # Start Menu shortcut — open it directly via os.startfile
+                os.startfile(resolved)
+            else:
+                subprocess.Popen(["start", "", resolved], shell=True)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-a", app_name])
+            subprocess.Popen(["open", "-a", resolved])
         else:
-            subprocess.Popen([app_name])
+            subprocess.Popen([resolved])
     except FileNotFoundError:
         return _err(f"Application not found: {app_name}")
     except Exception as e:
         return _err(f"Failed to open {app_name}: {e}")
 
     return {
-        "payload": {"type": "app", "target": app_name},
+        "payload": {"type": "app", "target": app_name, "resolved": resolved},
         "summary": f"Opened {app_name}.",
         "success": True,
     }

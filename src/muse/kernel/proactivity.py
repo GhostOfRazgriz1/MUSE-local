@@ -791,6 +791,8 @@ class ProactivityManager:
                         "Keep it to 2-4 sentences. Be warm but concise. "
                         "Use the user's local time as the only time reference — "
                         "never mention other timezones or what time it is elsewhere."
+                        + (f"\n\nRespond in {self._orch._user_language}."
+                           if self._orch._user_language else "")
                     )},
                     {"role": "user", "content": context_block},
                 ],

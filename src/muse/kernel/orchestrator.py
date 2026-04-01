@@ -224,6 +224,9 @@ class Orchestrator:
         from muse.kernel.emotions import EmotionTracker
         self._emotions = EmotionTracker(memory_repo, self._session_repo)
 
+        # User language preference (cached from user_settings)
+        self._user_language: str = ""
+
         # Agent mood — visible state surfaced in the UI.
         # Hierarchy: working > dreaming > LLM-picked/emotion > thinking > neutral > resting
         self._mood: str = "resting"
@@ -327,6 +330,17 @@ class Orchestrator:
             row = await cursor.fetchone()
         if row and row[0] == "true":
             await self._auto_grant_first_party_permissions()
+
+        # Load language preference
+        try:
+            async with self._db.execute(
+                "SELECT value FROM user_settings WHERE key = 'language'"
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row and row[0]:
+                self._user_language = row[0]
+        except Exception:
+            pass
 
         # Prewarm memory cache
         await self._promotion.prewarm_cache()
@@ -918,6 +932,10 @@ class Orchestrator:
         # Ensure we have a session
         await self.ensure_session()
 
+        # Capture session_id NOW — it won't change even if the user
+        # switches sessions while this task is still running.
+        frozen_session_id = self._session_id
+
         # Snapshot the conversation history BEFORE appending this message.
         # When messages run concurrently, each one should only see the
         # history that existed when the user sent it — not results from
@@ -1009,6 +1027,7 @@ class Orchestrator:
                 async for event in self._handle_inline(
                     user_message, intent, history_snapshot,
                     precomputed_embedding=precomputed_embedding,
+                    session_id=frozen_session_id,
                 ):
                     yield event
             elif intent.mode == ExecutionMode.DELEGATED:
@@ -1025,6 +1044,7 @@ class Orchestrator:
                     async for event in self._handle_delegated(
                         user_message, intent, history_snapshot,
                         precomputed_embedding=precomputed_embedding,
+                        session_id=frozen_session_id,
                     ):
                         yield event
             elif intent.mode == ExecutionMode.MULTI_DELEGATED:
@@ -1044,6 +1064,7 @@ class Orchestrator:
                     async for event in self._handle_delegated(
                         user_message, intent, history_snapshot,
                         precomputed_embedding=precomputed_embedding,
+                        session_id=frozen_session_id,
                     ):
                         yield event
                 else:
@@ -1052,12 +1073,16 @@ class Orchestrator:
                         skill_id=",".join(intent.skill_ids),
                     )
                     self._last_delegated_message = user_message
-                    async for event in self._handle_multi_delegated(user_message, intent):
+                    async for event in self._handle_multi_delegated(
+                        user_message, intent, session_id=frozen_session_id,
+                    ):
                         yield event
             elif intent.mode == ExecutionMode.GOAL:
                 await self._patterns.record("goal", instruction=user_message)
                 self._last_delegated_message = user_message
-                async for event in self._handle_goal(user_message, intent):
+                async for event in self._handle_goal(
+                    user_message, intent, session_id=frozen_session_id,
+                ):
                     yield event
             else:
                 await self._patterns.record("inline", instruction=user_message)
@@ -1066,7 +1091,17 @@ class Orchestrator:
 
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
-            yield {"type": "error", "content": f"Something went wrong: {str(e)}"}
+            error_content = f"Something went wrong: {str(e)}"
+            yield {"type": "error", "content": error_content}
+            # Persist so the error survives session switches
+            if frozen_session_id:
+                try:
+                    await self._session_repo.add_message(
+                        frozen_session_id, "assistant", error_content,
+                        event_type="error",
+                    )
+                except Exception:
+                    pass
 
     async def _persist_message_and_title(self, user_message: str) -> None:
         """Fire-and-forget: persist user message to DB and auto-title session."""
@@ -1099,6 +1134,7 @@ class Orchestrator:
         self, user_message: str, intent,
         history_snapshot: list[dict] | None = None,
         precomputed_embedding: list[float] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Handle a message directly via LLM call."""
         yield {"type": "thinking", "content": "Thinking..."}
@@ -1139,6 +1175,7 @@ class Orchestrator:
         # Mood hint only for inline (user-facing) responses — saves tokens
         # on skill execution, classification, and planning calls.
         ctx.include_mood_hint = True
+        ctx.language = self._user_language
 
         messages = ctx.to_messages()
 
@@ -1196,6 +1233,7 @@ class Orchestrator:
         asyncio.create_task(self._persist_and_demote(
             response_text, model,
             tokens_in=tokens_in, tokens_out=tokens_out,
+            session_id=session_id,
         ))
 
         # Final complete response event (for clients that don't handle chunks)
@@ -1210,12 +1248,14 @@ class Orchestrator:
     async def _persist_and_demote(
         self, response_text: str, model_used: str,
         tokens_in: int = 0, tokens_out: int = 0,
+        session_id: str | None = None,
     ) -> None:
         """Fire-and-forget: persist assistant response and extract facts."""
+        sid = session_id or self._session_id
         try:
-            if self._session_id:
+            if sid:
                 msg_id = await self._session_repo.add_message(
-                    self._session_id, "assistant", response_text,
+                    sid, "assistant", response_text,
                     event_type="response",
                     parent_id=self._branch_head_id,
                     metadata={
@@ -1283,6 +1323,7 @@ class Orchestrator:
         history_snapshot: list[dict] | None = None,
         skip_permission_check: bool = False,
         precomputed_embedding: list[float] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Delegate to a single skill via task spawning."""
         skill_id = intent.skill_id
@@ -1311,6 +1352,7 @@ class Orchestrator:
 
         if missing_perms:
             request_ids = []
+            request_events = []
             for perm in missing_perms:
                 risk_tier = await self._permissions.get_risk_tier(perm)
                 request = await self._permissions.request_permission(
@@ -1318,19 +1360,28 @@ class Orchestrator:
                     f"needed to execute: {user_message}"
                 )
                 request_ids.append(request["request_id"])
-                yield {
+                event = {
                     "type": "permission_request",
                     **request,
                     "is_first_party": manifest.is_first_party,
                 }
+                request_events.append(event)
+                yield event
 
-            for rid in request_ids:
+            for rid, evt in zip(request_ids, request_events):
                 self._pending_permission_tasks[rid] = {
                     "message": user_message,
                     "skill_id": skill_id,
                     "all_request_ids": request_ids,
                     "intent": intent,
                     "precomputed_embedding": precomputed_embedding,
+                    "session_id": session_id,
+                    # Store event data so we can re-emit on reconnect
+                    "permission": evt.get("permission", ""),
+                    "risk_tier": evt.get("risk_tier", "medium"),
+                    "display_text": evt.get("display_text", ""),
+                    "suggested_mode": evt.get("suggested_mode", "once"),
+                    "is_first_party": evt.get("is_first_party", True),
                 }
             return
 
@@ -1342,6 +1393,7 @@ class Orchestrator:
             action=intent.action,
             history_snapshot=history_snapshot,
             precomputed_embedding=precomputed_embedding,
+            session_id=session_id,
         ):
             yield event
 
@@ -1478,6 +1530,7 @@ class Orchestrator:
 
     async def _handle_multi_delegated(
         self, user_message: str, intent,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Handle a compound message by running multiple skills.
 
@@ -1589,6 +1642,7 @@ class Orchestrator:
                     action=st.action,
                     pipeline_context=pipe_ctx,
                     record_history=False,
+                    session_id=session_id,
                 ):
                     if event.get("type") == "response":
                         results[idx] = {
@@ -1622,6 +1676,7 @@ class Orchestrator:
                             action=sub_task.action,
                             pipeline_context=pipe,
                             record_history=False,
+                            session_id=session_id,
                         ):
                             evt["sub_task_index"] = sub_idx
                             await event_queue.put((sub_idx, evt))
@@ -1706,6 +1761,7 @@ class Orchestrator:
 
     async def _handle_goal(
         self, user_message: str, intent,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Handle a complex goal by generating and executing a multi-step plan."""
         import uuid as _uuid
@@ -1861,6 +1917,7 @@ class Orchestrator:
                             action=st.action,
                             pipeline_context=pipe_ctx,
                             record_history=False,
+                            session_id=session_id,
                         ):
                             if event.get("type") == "response":
                                 results[idx] = {
@@ -2063,6 +2120,7 @@ class Orchestrator:
                 action=st.action,
                 pipeline_context=pipe_ctx,
                 record_history=False,
+                session_id=session_id,
             ):
                 if event.get("type") == "response":
                     results[idx] = {"status": "completed", "summary": event.get("content", "")}
@@ -2153,6 +2211,7 @@ class Orchestrator:
         _invoke_depth: int = 0,
         _invoke_chain: list[str] | None = None,
         precomputed_embedding: list[float] | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Execute a single skill as a sub-task. Yields events.
 
@@ -2210,6 +2269,7 @@ class Orchestrator:
             conversation_history=comp_recent,
             running_summary=comp_summary,
         )
+        assembled_ctx.language = self._user_language
 
         # Determine isolation tier
         tier = manifest.isolation_tier
@@ -2411,6 +2471,7 @@ class Orchestrator:
                     summary, completed_task.result,
                     tokens_in=completed_task.tokens_in,
                     tokens_out=completed_task.tokens_out,
+                    session_id=session_id,
                 ))
                 # Revert from "working" but preserve emotional moods.
                 if self._mood == "working":
@@ -2423,17 +2484,45 @@ class Orchestrator:
                     "task_id": task.id,
                     "error": error_msg,
                 }
+                # Persist error so it survives session switches
+                _sid = session_id or self._session_id
+                if record_history and _sid:
+                    error_summary = f"Task failed ({manifest.name}): {error_msg}"
+                    self._conversation_history.append({
+                        "role": "assistant",
+                        "content": error_summary,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    try:
+                        await self._session_repo.add_message(
+                            _sid, "assistant", error_summary,
+                            event_type="error",
+                            metadata={"skill_id": skill_id, "task_id": task.id},
+                        )
+                    except Exception:
+                        pass
                 if self._mood == "working":
                     await self.set_mood("neutral", force=True)
 
         except asyncio.TimeoutError:
             _t.task_complete(task.id, skill_id, "timeout")
             await self._task_manager.kill(task.id, "timeout")
+            timeout_msg = f"Task timed out after {manifest.timeout_seconds}s"
             yield {
                 "type": "task_failed",
                 "task_id": task.id,
-                "error": f"Task timed out after {manifest.timeout_seconds}s",
+                "error": timeout_msg,
             }
+            if self._session_id:
+                try:
+                    await self._session_repo.add_message(
+                        self._session_id, "assistant",
+                        f"Task failed ({manifest.name}): {timeout_msg}",
+                        event_type="error",
+                        metadata={"skill_id": skill_id, "task_id": task.id},
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             _t.error("orchestrator", str(e), task_id=task.id, skill_id=skill_id)
             await self._task_manager.update_status(task.id, "failed", error=str(e))
@@ -2481,12 +2570,14 @@ class Orchestrator:
         result: Any,
         tokens_in: int = 0,
         tokens_out: int = 0,
+        session_id: str | None = None,
     ) -> None:
         """Fire-and-forget: persist response, absorb task result, audit log."""
+        sid = session_id or self._session_id
         try:
-            if self._session_id:
+            if sid:
                 await self._session_repo.add_message(
-                    self._session_id, "assistant", summary,
+                    sid, "assistant", summary,
                     event_type="response",
                     metadata={
                         "skill_id": skill_id,
@@ -2546,16 +2637,19 @@ class Orchestrator:
         user_message = pending["message"]
 
         cached_emb = pending.get("precomputed_embedding")
+        cached_sid = pending.get("session_id")
 
         if pending.get("is_multi_task") and pending.get("intent"):
             async for event in self._handle_multi_delegated(
                 user_message, pending["intent"],
+                session_id=cached_sid,
             ):
                 yield event
         elif pending.get("intent"):
             async for event in self._handle_delegated(
                 user_message, pending["intent"], skip_permission_check=True,
                 precomputed_embedding=cached_emb,
+                session_id=cached_sid,
             ):
                 yield event
         else:
@@ -2610,6 +2704,64 @@ class Orchestrator:
 
     def unregister_bridge(self, task_id: str) -> None:
         self._active_bridges.pop(task_id, None)
+
+    def get_pending_permissions_for_session(self, session_id: str) -> list[dict]:
+        """Return pending permission request events for a session.
+
+        Called when a WS reconnects so the user sees any unanswered
+        permission prompts from before they switched away.
+        """
+        results = []
+        seen_groups: set[str] = set()
+        for rid, pending in self._pending_permission_tasks.items():
+            if pending.get("session_id") != session_id:
+                continue
+            group_key = ",".join(sorted(pending.get("all_request_ids", [rid])))
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+            results.append({
+                "type": "permission_request",
+                "request_id": rid,
+                "skill_id": pending.get("skill_id", ""),
+                "permission": pending.get("permission", ""),
+                "risk_tier": pending.get("risk_tier", "medium"),
+                "display_text": pending.get("display_text",
+                                            f"Permission needed for {pending.get('skill_id', 'unknown')}"),
+                "suggested_mode": pending.get("suggested_mode", "once"),
+                "is_first_party": pending.get("is_first_party", True),
+            })
+        return results
+
+    async def cancel_pending_user_interactions(self, session_id: str | None = None) -> None:
+        """Resolve all pending user futures with defaults and persist a note.
+
+        Called when the WebSocket disconnects so in-flight skills don't
+        hang waiting 120s for a user response that will never arrive.
+        Persists an interruption message so the user sees what happened
+        when they return.
+        """
+        had_pending = False
+        for bridge in self._active_bridges.values():
+            if hasattr(bridge, "_user_futures"):
+                for req_id, future in list(bridge._user_futures.items()):
+                    if not future.done():
+                        future.set_result(None)
+                        had_pending = True
+                bridge._user_futures.clear()
+
+        if had_pending and session_id:
+            msg = (
+                "The task was interrupted because you switched away. "
+                "You can say **\"try again\"** to re-run it."
+            )
+            try:
+                await self._session_repo.add_message(
+                    session_id, "assistant", msg,
+                    event_type="error",
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Task control (called from UI)

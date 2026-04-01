@@ -674,6 +674,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                       <div className={`msg-avatar agent streaming mood-${agentMood}`}>
                         <IconBot size={16} />
                       </div>
+                      {/* Streaming always gets mood — it's the active message */}
                       <div className="msg-bubble agent">
                         <MarkdownContent content={evt.content || evt.delta} />
                       </div>
@@ -682,9 +683,12 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
 
                 case "response": {
                   const fileInfo = parseFileCard(evt.content);
+                  // Only apply mood class to the most recent message — history
+                  // messages should always show a normal avatar.
+                  const isLatest = i === messages.length - 1;
                   return wrapMsg(
                     <div className="msg-row agent">
-                      <div className={`msg-avatar agent mood-${agentMood}`}>
+                      <div className={`msg-avatar agent${isLatest ? ` mood-${agentMood}` : ""}`}>
                         <IconBot size={16} />
                       </div>
                       <div className="msg-bubble agent">
@@ -795,12 +799,16 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                     </div>
                   );
 
-                case "task_failed":
+                case "task_failed": {
+                  const errText = (evt.error || "Unknown error").length > 200
+                    ? evt.error.slice(0, 200) + "..."
+                    : evt.error;
                   return wrapMsg(
-                    <div className="task-notification failed">
-                      Task failed — {evt.error}
+                    <div className="task-notification failed" title={evt.error}>
+                      Task failed — {errText}
                     </div>
                   );
+                }
 
                 case "multi_task_started":
                   return wrapMsg(
@@ -1068,13 +1076,17 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                     </div>
                   );
 
-                case "error":
+                case "error": {
+                  const errContent = (evt.content || "").length > 300
+                    ? evt.content.slice(0, 300) + "..."
+                    : evt.content;
                   return wrapMsg(
-                    <div className="error-bubble" role="alert">
+                    <div className="error-bubble" role="alert" title={evt.content}>
                       <IconAlertCircle size={15} />
-                      {evt.content}
+                      {errContent}
                     </div>
                   );
+                }
 
                 default:
                   return null;

@@ -2068,6 +2068,8 @@ textarea:focus-visible {
   background: var(--error-subtle);
   color: var(--error);
   border: 1px solid rgba(248, 113, 113, 0.15);
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .skill-options-row {
@@ -2259,18 +2261,20 @@ textarea:focus-visible {
 /* ── Error Bubble ── */
 .error-bubble {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 10px 16px;
   border-radius: var(--radius-md);
   background: var(--error-subtle);
   border: 1px solid rgba(248, 113, 113, 0.15);
   color: var(--error);
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   margin: 4px auto;
   max-width: 80%;
   width: fit-content;
   animation: msg-in 0.25s var(--ease-out);
+  overflow: hidden;
+  word-break: break-word;
 }
 
 /* ── Buttons ── */

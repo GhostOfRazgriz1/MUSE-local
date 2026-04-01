@@ -114,6 +114,7 @@ class AssembledContext:
     instruction: str = ""
     emotional_context: str = ""  # Injected by orchestrator when relationship level permits
     include_mood_hint: bool = False  # Only True for user-facing inline responses
+    language: str = ""  # User's preferred language (e.g. "Japanese", "Spanish")
 
     # Token accounting
     system_tokens: int = 0
@@ -143,6 +144,12 @@ class AssembledContext:
             f"\nCurrent date and time: {time_str} (local), {now.strftime('%Y-%m-%dT%H:%M:%SZ')} (UTC)",
             f"Platform: {platform_str}",
         ]
+
+        if self.language:
+            system_parts.append(
+                f"Always respond in {self.language}. "
+                f"Adapt all output — greetings, summaries, follow-up questions — to {self.language}."
+            )
 
         if self.user_profile_entries:
             profile_text = "\n".join(

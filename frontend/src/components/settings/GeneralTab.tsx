@@ -322,6 +322,51 @@ export default function GeneralTab() {
         </div>
       </SettingsSection>
 
+      {/* Language */}
+      <SettingsSection title="Language" description="The language your agent responds in.">
+        <div className="settings-field">
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              className="settings-input"
+              style={{ flex: 1 }}
+              value={settings["language"] ?? ""}
+              placeholder="English (default)"
+              onChange={(e) =>
+                setSettings((prev) => ({ ...prev, language: e.target.value }))
+              }
+              onBlur={(e) => saveSetting("language", e.target.value)}
+              list="language-suggestions"
+            />
+            <datalist id="language-suggestions">
+              <option value="English" />
+              <option value="Spanish" />
+              <option value="French" />
+              <option value="German" />
+              <option value="Japanese" />
+              <option value="Korean" />
+              <option value="Chinese (Simplified)" />
+              <option value="Chinese (Traditional)" />
+              <option value="Portuguese" />
+              <option value="Arabic" />
+              <option value="Hindi" />
+              <option value="Russian" />
+              <option value="Italian" />
+              <option value="Dutch" />
+              <option value="Thai" />
+              <option value="Vietnamese" />
+              <option value="Indonesian" />
+              <option value="Turkish" />
+            </datalist>
+            {saving === "language" && (
+              <span className="settings-saving">Saving...</span>
+            )}
+          </div>
+          <div className="settings-hint">
+            Leave blank for English. The agent will respond, greet, and summarize in your chosen language.
+          </div>
+        </div>
+      </SettingsSection>
+
       {/* Notifications */}
       <SettingsSection
         title="Desktop Notifications"

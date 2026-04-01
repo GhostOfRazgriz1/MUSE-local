@@ -32,6 +32,7 @@ _ALLOWED_KEY_PREFIXES = (
     "font.",
     "user_name",
     "user_city",
+    "language",
 )
 
 # OAuth client IDs are safe to store in user_settings (not secret).
@@ -91,6 +92,11 @@ async def set_setting(key: str, body: dict):
         (key, str(value), now),
     )
     await orchestrator._db.commit()
+
+    # Hot-reload language preference so it takes effect immediately.
+    if key == "language":
+        orchestrator._user_language = str(value).strip()
+
     return {"key": key, "value": value}
 
 
