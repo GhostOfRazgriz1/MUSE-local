@@ -2108,6 +2108,11 @@ class Orchestrator:
         This is the shared execution core used by both _handle_delegated
         (single task) and _handle_multi_delegated (multi-task).
         """
+        # Enforce subtask depth limit to prevent recursive task spawning.
+        if _invoke_depth >= self._config.execution.subtask_depth_limit:
+            yield {"type": "error", "content": f"Task nesting depth limit ({self._config.execution.subtask_depth_limit}) exceeded."}
+            return
+
         # Sanitize instruction to prevent prompt injection from LLM-generated plans.
         instruction = _sanitize_memory_value(instruction)
 

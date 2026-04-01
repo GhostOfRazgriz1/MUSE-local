@@ -169,7 +169,8 @@ class OAuthManager:
         return auth_url, state
 
     async def _load_client_secret(self, provider_name: str | None = None) -> str:
-        """Load the OAuth client_secret from user_settings.
+        """Load the OAuth client_secret from the vault (preferred) or
+        user_settings (legacy fallback).
 
         When *provider_name* is given, loads the secret for that specific
         provider.  Otherwise falls back to the first configured secret.
@@ -177,25 +178,33 @@ class OAuthManager:
         The secret is stored server-side only — it is never accepted from
         the client or persisted inside the token bundle.
         """
-        if self._db is None:
-            raise ValueError("Database not available for client_secret lookup")
+        # Preferred: check the vault first (secrets stored via settings whitelist).
         if provider_name:
             key = f"oauth.{provider_name}.client_secret"
-            async with self._db.execute(
-                "SELECT value FROM user_settings WHERE key = ?", (key,)
-            ) as cursor:
-                row = await cursor.fetchone()
-        else:
-            # Fallback: find any configured client_secret
-            async with self._db.execute(
-                "SELECT value FROM user_settings WHERE key LIKE 'oauth.%.client_secret' LIMIT 1"
-            ) as cursor:
-                row = await cursor.fetchone()
-        if not row or not row[0]:
-            raise ValueError(
-                "No client_secret configured. Add your OAuth client secret in Settings."
-            )
-        return row[0]
+            vault_secret = await self._vault.retrieve_raw(key)
+            if vault_secret:
+                return vault_secret
+
+        # Legacy fallback: check user_settings (for secrets stored before
+        # the vault migration).
+        if self._db is not None:
+            if provider_name:
+                key = f"oauth.{provider_name}.client_secret"
+                async with self._db.execute(
+                    "SELECT value FROM user_settings WHERE key = ?", (key,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+            else:
+                async with self._db.execute(
+                    "SELECT value FROM user_settings WHERE key LIKE 'oauth.%.client_secret' LIMIT 1"
+                ) as cursor:
+                    row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+
+        raise ValueError(
+            "No client_secret configured. Add your OAuth client secret in Settings."
+        )
 
     async def complete_flow(
         self,

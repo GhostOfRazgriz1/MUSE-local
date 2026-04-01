@@ -102,27 +102,21 @@ class MemoryRepository:
 
     async def get_by_relevance(
         self,
-        namespace: str = None,
+        namespace: str,
         limit: int = 100,
         min_score: float = 0.25,
     ) -> list[dict]:
-        """Return entries ordered by relevance_score descending."""
-        if namespace is not None:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + " FROM memory_entries"
-                + " WHERE namespace = ? AND relevance_score >= ? AND superseded_by IS NULL"
-                + " ORDER BY relevance_score DESC LIMIT ?"
-            )
-            params = (namespace, min_score, limit)
-        else:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + " FROM memory_entries"
-                + " WHERE relevance_score >= ? AND superseded_by IS NULL"
-                + " ORDER BY relevance_score DESC LIMIT ?"
-            )
-            params = (min_score, limit)
+        """Return entries ordered by relevance_score descending.
+
+        Namespace is required to prevent cross-namespace data leakage.
+        """
+        sql = (
+            "SELECT " + ", ".join(MEMORY_COLUMNS)
+            + " FROM memory_entries"
+            + " WHERE namespace = ? AND relevance_score >= ? AND superseded_by IS NULL"
+            + " ORDER BY relevance_score DESC LIMIT ?"
+        )
+        params = (namespace, min_score, limit)
 
         async with self._db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
@@ -147,15 +141,15 @@ class MemoryRepository:
     async def search(
         self,
         query_embedding: list[float],
-        namespace: str = None,
+        namespace: str,
         limit: int = 10,
         min_score: float = 0.25,
     ) -> list[dict]:
-        """Semantic similarity search over memory entries.
+        """Semantic similarity search scoped to a single namespace.
 
-        Attempts to use sqlite-vec for accelerated vector search.  If the
-        extension is unavailable, falls back to a Python-side brute-force
-        cosine similarity scan.
+        Namespace is required to prevent cross-namespace data leakage.
+        Internal callers needing multi-namespace search should use
+        ``search_namespaces()`` with an explicit list of namespaces.
         """
         try:
             return await self._search_vec(query_embedding, namespace, limit, min_score)
@@ -165,32 +159,22 @@ class MemoryRepository:
     async def _search_vec(
         self,
         query_embedding: list[float],
-        namespace: str | None,
+        namespace: str,
         limit: int,
         min_score: float,
     ) -> list[dict]:
         """Vector search using the sqlite-vec extension."""
         query_blob = _embedding_to_blob(query_embedding)
         # sqlite-vec provides vec_distance_cosine; similarity = 1 - distance
-        if namespace is not None:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + ", (1.0 - vec_distance_cosine(embedding, ?)) AS sim"
-                + " FROM memory_entries"
-                + " WHERE namespace = ? AND superseded_by IS NULL"
-                + " AND embedding IS NOT NULL"
-                + " ORDER BY sim DESC LIMIT ?"
-            )
-            params = (query_blob, namespace, limit)
-        else:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + ", (1.0 - vec_distance_cosine(embedding, ?)) AS sim"
-                + " FROM memory_entries"
-                + " WHERE superseded_by IS NULL AND embedding IS NOT NULL"
-                + " ORDER BY sim DESC LIMIT ?"
-            )
-            params = (query_blob, limit)
+        sql = (
+            "SELECT " + ", ".join(MEMORY_COLUMNS)
+            + ", (1.0 - vec_distance_cosine(embedding, ?)) AS sim"
+            + " FROM memory_entries"
+            + " WHERE namespace = ? AND superseded_by IS NULL"
+            + " AND embedding IS NOT NULL"
+            + " ORDER BY sim DESC LIMIT ?"
+        )
+        params = (query_blob, namespace, limit)
 
         async with self._db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
@@ -207,26 +191,18 @@ class MemoryRepository:
     async def _search_fallback(
         self,
         query_embedding: list[float],
-        namespace: str | None,
+        namespace: str,
         limit: int,
         min_score: float,
     ) -> list[dict]:
         """Brute-force cosine similarity search in Python."""
-        if namespace is not None:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + " FROM memory_entries"
-                + " WHERE namespace = ? AND superseded_by IS NULL"
-                + " AND embedding IS NOT NULL"
-            )
-            params: tuple = (namespace,)
-        else:
-            sql = (
-                "SELECT " + ", ".join(MEMORY_COLUMNS)
-                + " FROM memory_entries"
-                + " WHERE superseded_by IS NULL AND embedding IS NOT NULL"
-            )
-            params = ()
+        sql = (
+            "SELECT " + ", ".join(MEMORY_COLUMNS)
+            + " FROM memory_entries"
+            + " WHERE namespace = ? AND superseded_by IS NULL"
+            + " AND embedding IS NOT NULL"
+        )
+        params: tuple = (namespace,)
 
         async with self._db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
@@ -244,6 +220,27 @@ class MemoryRepository:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [entry for _, entry in scored[:limit]]
+
+    async def search_namespaces(
+        self,
+        query_embedding: list[float],
+        namespaces: list[str],
+        limit: int = 10,
+        min_score: float = 0.25,
+    ) -> list[dict]:
+        """Semantic search across an explicit list of namespaces.
+
+        For trusted internal callers (context assembly, promotion) that
+        need to query multiple namespaces at once.  Skills must use
+        ``search()`` which is scoped to a single namespace.
+        """
+        if not namespaces:
+            return []
+        results: list[dict] = []
+        for ns in namespaces:
+            results.extend(await self.search(query_embedding, namespace=ns, limit=limit, min_score=min_score))
+        results.sort(key=lambda e: e.get("similarity", 0), reverse=True)
+        return results[:limit]
 
     # ------------------------------------------------------------------
     # Write

@@ -273,10 +273,19 @@ class SkillSandbox:
             # Cold spawn with a minimal environment to prevent
             # PYTHONPATH/LD_PRELOAD hijacking.
             import os
+            _SAFE_KEYS = frozenset({
+                "PATH", "HOME", "SYSTEMROOT", "TEMP", "TMP",
+                "USERPROFILE", "COMSPEC", "LANG", "LC_ALL",
+            })
+            _DANGEROUS_KEYS = frozenset({
+                "PYTHONPATH", "PYTHONHOME", "PYTHONEXECUTABLE",
+                "PYTHONSTARTUP", "PYTHONUSERBASE",
+                "LD_PRELOAD", "LD_LIBRARY_PATH",
+                "DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+            })
             safe_env = {
                 k: v for k, v in os.environ.items()
-                if k in ("PATH", "HOME", "SYSTEMROOT", "TEMP", "TMP",
-                         "USERPROFILE", "COMSPEC", "LANG", "LC_ALL")
+                if k in _SAFE_KEYS and k not in _DANGEROUS_KEYS
             }
             process = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "muse.skills._bootstrap",
@@ -648,15 +657,19 @@ class LocalBridge:
                         return
 
                 import httpx
-                # SSRF protection already validated the resolved IP above.
-                # Use the original URL so TLS certificate validation works
-                # (certificates are issued for hostnames, not IPs).
+                # Pin the resolved IP to prevent DNS rebinding (TOCTOU).
+                # Replace the hostname in the URL with the validated IP and
+                # set the Host header so TLS certificate validation works.
                 extra_headers = dict(message.headers) if message.headers else {}
+                request_url = message.url
+                if _resolved_ip and _hostname:
+                    extra_headers.setdefault("Host", _hostname)
+                    request_url = message.url.replace(_hostname, _resolved_ip, 1)
 
                 if not hasattr(self, "_http_client") or self._http_client is None:
                     self._http_client = httpx.AsyncClient(timeout=30.0, verify=True)
                 resp = await self._http_client.request(
-                    message.method, message.url,
+                    message.method, request_url,
                     headers=extra_headers,
                     content=message.body.encode() if message.body else None,
                 )

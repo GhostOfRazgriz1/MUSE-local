@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 import { IconSend, IconBot, IconShield, IconAlertCircle, IconCopy, IconClipboardCheck, IconCheck, IconChevronDown, IconGitBranch, IconNavigation, IconClock, IconPaperclip, IconFileText, IconDownload, IconX, IconRefresh } from "./Icons";
 import { renderWithFileChips } from "./FileChip";
 import type { ChatEvent, DisplayMessage, ApprovalMode } from "../types/events";
@@ -23,6 +24,7 @@ interface ChatStreamProps {
 }
 
 const remarkPlugins = [remarkGfm];
+const rehypePlugins = [rehypeSanitize];
 
 /**
  * Strip LLM-hallucinated tool-call XML (e.g. <function_calls>, <function_result>)
@@ -139,6 +141,7 @@ const MarkdownContent: React.FC<{ content: string }> = React.memo(({ content }) 
     <div className="md-content">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         components={{
           code({ className, children, ...props }) {
             const isBlock = className?.startsWith("language-");

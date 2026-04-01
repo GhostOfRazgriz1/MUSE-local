@@ -324,6 +324,8 @@ async def chat_rest(message: dict):
     content = message.get("content", "").strip()
     if not content:
         return {"error": "Empty message"}
+    if len(content) > MAX_MESSAGE_LENGTH:
+        return {"error": f"Message too long ({len(content):,} chars). Maximum is {MAX_MESSAGE_LENGTH:,} characters."}
 
     events = []
     async for event in orchestrator.handle_message(content):

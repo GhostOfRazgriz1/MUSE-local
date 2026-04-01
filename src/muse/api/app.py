@@ -146,12 +146,17 @@ def create_app(orchestrator=None) -> FastAPI:
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
         # SPA fallback — only for non-API paths
+        _frontend_root = frontend_dist.resolve()
+
         @app.get("/{path:path}")
         async def spa_catch_all(path: str):
             # Never intercept API routes
             if path.startswith("api/"):
                 raise HTTPException(404, "Not found")
-            file_path = frontend_dist / path
+            file_path = (frontend_dist / path).resolve()
+            # Block path traversal — resolved path must stay inside frontend_dist
+            if not str(file_path).startswith(str(_frontend_root)):
+                raise HTTPException(404, "Not found")
             if file_path.is_file():
                 return _FileResponse(str(file_path))
             return _FileResponse(str(frontend_dist / "index.html"))

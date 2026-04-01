@@ -78,21 +78,40 @@ class PromotionManager:
     # Disk -> Cache  (query-driven)
     # ------------------------------------------------------------------
 
+    # Well-known namespaces used for cross-namespace promotion when no
+    # explicit namespace is provided (trusted internal context assembly).
+    _PROMOTABLE_NS = [
+        "_profile", "_facts", "_project", "_conversation",
+        "_emotions", "_patterns", "_scheduled",
+    ]
+
     async def promote_disk_to_cache(
         self,
         query_embedding: list[float],
-        namespace: str = None,
+        namespace: str | None = None,
         limit: int = 50,
     ) -> None:
         """Search disk for entries similar to *query_embedding* and load
         them into the cache.
+
+        If *namespace* is provided, only that namespace is searched.
+        Otherwise searches a fixed list of well-known namespaces to
+        prevent unbounded cross-namespace access.
         """
-        results = await self._repo.search(
-            query_embedding,
-            namespace=namespace,
-            limit=limit,
-            min_score=self._config.min_relevance_threshold,
-        )
+        if namespace is not None:
+            results = await self._repo.search(
+                query_embedding,
+                namespace=namespace,
+                limit=limit,
+                min_score=self._config.min_relevance_threshold,
+            )
+        else:
+            results = await self._repo.search_namespaces(
+                query_embedding,
+                namespaces=self._PROMOTABLE_NS,
+                limit=limit,
+                min_score=self._config.min_relevance_threshold,
+            )
         for entry in results:
             ns = entry.get("namespace", "default")
             key = entry.get("key", "")

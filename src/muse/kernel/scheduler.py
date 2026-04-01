@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # Check for due tasks every 30 seconds
 POLL_INTERVAL = 30
 
+# Minimum allowed interval between scheduled task runs (5 minutes).
+# Prevents resource exhaustion from overly frequent scheduling.
+MIN_INTERVAL_SECONDS = 300
+
 
 class Scheduler:
     """Runs skills on a recurring schedule."""
@@ -56,6 +60,11 @@ class Scheduler:
         interval_seconds: int,
     ) -> dict:
         """Create a new scheduled task. Returns the task record."""
+        if interval_seconds < MIN_INTERVAL_SECONDS:
+            raise ValueError(
+                f"Interval must be at least {MIN_INTERVAL_SECONDS}s "
+                f"({MIN_INTERVAL_SECONDS // 60} minutes)"
+            )
         task_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         next_run = now + timedelta(seconds=interval_seconds)

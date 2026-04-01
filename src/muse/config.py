@@ -141,7 +141,7 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     default_model: str = "anthropic/claude-sonnet-4"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    debug: bool = True
+    debug: bool = False
 
     @property
     def identity_path(self) -> Path:
