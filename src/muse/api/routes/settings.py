@@ -115,19 +115,23 @@ async def list_models():
 
     try:
         models = await orchestrator._provider.list_models()
-        return {
-            "models": [
-                {
-                    "id": m.id,
-                    "name": m.name,
-                    "provider": m.id.split("/")[0] if "/" in m.id else "other",
-                    "context_window": m.context_window,
-                    "input_price": m.input_price_per_token,
-                    "output_price": m.output_price_per_token,
-                }
-                for m in models
-            ]
-        }
+        # Direct-registered prefixes — any model whose prefix isn't here
+        # is served by the fallback provider (OpenRouter).
+        direct_prefixes = set(orchestrator._provider.providers.keys())
+        result = []
+        for m in models:
+            prefix = m.id.split("/")[0] if "/" in m.id else "other"
+            served_by = prefix if prefix in direct_prefixes else "openrouter"
+            result.append({
+                "id": m.id,
+                "name": m.name,
+                "provider": prefix,
+                "served_by": served_by,
+                "context_window": m.context_window,
+                "input_price": m.input_price_per_token,
+                "output_price": m.output_price_per_token,
+            })
+        return {"models": result}
     except Exception as e:
         return {"models": [], "error": str(e)}
 

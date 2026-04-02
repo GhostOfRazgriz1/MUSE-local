@@ -51,12 +51,19 @@ class ClassifiedIntent:
     clarify_question: str = ""  # Set when mode == CLARIFY
 
 
-MODEL_KEYWORDS: dict[str, str] = {
-    "use claude": "anthropic/claude-sonnet-4",
-    "use opus": "anthropic/claude-opus-4",
-    "use gpt": "openai/gpt-4o",
-    "use gemini": "google/gemini-2.0-flash",
+# Provider aliases — map common names to provider prefixes for "use X" matching.
+# Only needed for names that differ from the prefix itself.
+_PROVIDER_ALIASES: dict[str, str] = {
+    "claude": "anthropic",
+    "chatgpt": "openai",
+    "gpt": "openai",
+    "google": "gemini",
+    "qwen": "alibaba",
+    "doubao": "bytedance",
 }
+
+# Matches "use <keyword>" in user messages (e.g., "use deepseek", "use opus").
+_USE_RE = re.compile(r"\buse\s+([\w.-]+)", re.IGNORECASE)
 
 # Messages matching these are ALWAYS handled inline — no LLM call needed.
 _INLINE_RE = re.compile(
@@ -87,10 +94,14 @@ class SemanticIntentClassifier:
         # Cached lookup structures — rebuilt only when skills change
         self._cached_skill_lines: str = ""
         self._cached_id_map: dict[str, str] = {}
+        # Cached model list grouped by provider prefix, for "use X" resolution.
+        # Populated lazily on first "use X" message, cleared on provider change.
+        self._model_cache: dict[str, list] = {}
 
     def set_provider(self, provider, default_model: str) -> None:
         self._provider = provider
         self._default_model = default_model
+        self._model_cache.clear()
 
     def _rebuild_cache(self) -> None:
         """Rebuild the cached skill_lines and id_map after skill registration changes."""
@@ -130,7 +141,7 @@ class SemanticIntentClassifier:
     ) -> ClassifiedIntent:
         """Classify intent via a single LLM call."""
         msg_lower = user_message.lower().strip()
-        model_override = _extract_model_override(msg_lower)
+        model_override = await self._resolve_model_override(msg_lower)
 
         # ── Fast inline exit: greetings, thanks, meta-questions ──
         if _INLINE_RE.search(msg_lower):
@@ -381,11 +392,44 @@ class SemanticIntentClassifier:
             logger.warning("Action resolution failed for %s: %s", skill_id, e)
             return None
 
+    # ------------------------------------------------------------------
+    # Dynamic model override resolution
+    # ------------------------------------------------------------------
 
-# ── Helpers ──────────────────────────────────────────────────────────
+    async def _resolve_model_override(self, msg_lower: str) -> str | None:
+        """Resolve 'use X' in user message to an actual model from connected providers.
 
-def _extract_model_override(msg_lower: str) -> str | None:
-    for keyword, model_id in MODEL_KEYWORDS.items():
-        if keyword in msg_lower:
-            return model_id
-    return None
+        Matches provider names (e.g. 'use deepseek'), aliases (e.g. 'use claude'),
+        and model names (e.g. 'use opus') against actually available models.
+        """
+        match = _USE_RE.search(msg_lower)
+        if not match or not self._provider:
+            return None
+
+        keyword = match.group(1).strip().lower()
+
+        # Lazily populate model cache from all connected providers.
+        if not self._model_cache:
+            try:
+                all_models = await self._provider.list_models()
+                for m in all_models:
+                    prefix = m.id.split("/")[0] if "/" in m.id else "other"
+                    self._model_cache.setdefault(prefix, []).append(m)
+            except Exception:
+                logger.debug("Failed to populate model cache for override resolution")
+                return None
+
+        # Resolve keyword to a provider prefix via aliases.
+        prefix = _PROVIDER_ALIASES.get(keyword, keyword)
+
+        # 1. Provider-level match — pick the first model from that provider.
+        if prefix in self._model_cache:
+            return self._model_cache[prefix][0].id
+
+        # 2. Model-name search — match keyword against model names/IDs.
+        for models in self._model_cache.values():
+            for m in models:
+                if keyword in m.name.lower() or keyword in m.id.lower():
+                    return m.id
+
+        return None

@@ -140,7 +140,6 @@ class Config:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     default_model: str = "anthropic/claude-sonnet-4"
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     debug: bool = False
 
     @property

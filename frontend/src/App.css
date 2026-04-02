@@ -2971,6 +2971,10 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+.settings-section-body:has(.sms-container) {
+  overflow: visible;
+}
+
 /* ── Form Fields ── */
 .settings-field {
   padding: var(--ui-card-pad);
@@ -3787,6 +3791,166 @@ textarea:focus-visible {
 .model-card-stats span {
   font-family: var(--font-mono);
   font-feature-settings: 'tnum';
+}
+
+.model-search-input {
+  margin-bottom: 12px;
+}
+
+/* ── Searchable Model Select ── */
+.sms-container {
+  position: relative;
+  width: 100%;
+}
+
+.sms-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ui-input-py) var(--ui-input-px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+  outline: none;
+  text-align: left;
+}
+
+.sms-trigger:focus,
+.sms-trigger:hover {
+  border-color: var(--accent);
+}
+
+.sms-trigger-placeholder {
+  color: var(--text-muted);
+}
+
+.sms-trigger-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.sms-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.sms-search-wrapper {
+  position: relative;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sms-search {
+  width: 100%;
+  padding: 6px 28px 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.sms-search:focus {
+  border-color: var(--accent);
+}
+
+.sms-search-clear {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+}
+
+.sms-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.sms-options {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.sms-group-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 8px 12px 4px;
+}
+
+.sms-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  text-align: left;
+  gap: 12px;
+}
+
+.sms-option:hover {
+  background: var(--bg-hover);
+}
+
+.sms-option-active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.sms-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-option-id {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-align: center;
 }
 
 .provider-group {

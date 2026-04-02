@@ -7,6 +7,7 @@ export interface ModelInfo {
   id: string;
   name: string;
   provider: string;
+  served_by: string;
   context_window: number;
   input_price: number;
   output_price: number;

@@ -73,7 +73,7 @@ async def create_orchestrator(config: Config | None = None):
     # OpenRouter is the fallback for any model prefix without a direct provider.
     openrouter_key = await credential_vault.retrieve("openrouter_api_key") or ""
     openrouter = OpenRouterProvider(
-        api_key=openrouter_key, base_url=config.openrouter_base_url,
+        api_key=openrouter_key, base_url=BUILTIN_PROVIDERS["openrouter"].base_url,
     )
     if openrouter_key:
         logger.info("Loaded OpenRouter key from vault")

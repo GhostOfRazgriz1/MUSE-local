@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   IconChevronDown,
   IconChevronRight,
@@ -7,6 +7,7 @@ import {
   IconTrash,
   IconCheck,
   IconAlertCircle,
+  IconX,
 } from "../Icons";
 import { apiFetch } from "../../hooks/useApiToken";
 import { SettingsSection, SettingsLoader, ModelInfo } from "./shared";
@@ -33,6 +34,7 @@ function ModelsTab() {
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [gallerySearch, setGallerySearch] = useState("");
 
   const fetchModels = useCallback(() => {
     apiFetch("/api/settings/models")
@@ -97,6 +99,44 @@ function ModelsTab() {
     } catch {}
   };
 
+  // ── All hooks must be above early returns ──
+
+  // Models from active providers only — filter on served_by (the provider
+  // that actually serves the model, e.g. "openrouter" for all OpenRouter models)
+  const activeProviderIds = useMemo(
+    () => new Set(providers.filter((p) => p.source !== null).map((p) => p.id)),
+    [providers],
+  );
+  const activeModels = useMemo(
+    () => models.filter((m) => activeProviderIds.has(m.served_by)),
+    [models, activeProviderIds],
+  );
+
+  // Group active models by provider
+  const activeGrouped = useMemo(() => {
+    return activeModels.reduce<Record<string, ModelInfo[]>>((acc, m) => {
+      const key = m.provider || "other";
+      (acc[key] ??= []).push(m);
+      return acc;
+    }, {});
+  }, [activeModels]);
+
+  // Search for the model gallery
+  const filteredGalleryModels = useMemo(() => {
+    if (!gallerySearch.trim()) return activeGrouped;
+    const q = gallerySearch.toLowerCase();
+    const result: Record<string, ModelInfo[]> = {};
+    for (const [prov, ms] of Object.entries(activeGrouped)) {
+      const filtered = ms.filter(
+        (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
+      );
+      if (filtered.length > 0) result[prov] = filtered;
+    }
+    return result;
+  }, [activeGrouped, gallerySearch]);
+
+  // ── Early returns (after all hooks) ──
+
   if (loading) return <SettingsLoader />;
   if (loadError) {
     return (
@@ -117,35 +157,9 @@ function ModelsTab() {
     return `$${(price * 1_000_000).toFixed(2)}/M`;
   };
 
-  // Group models by provider
-  const grouped = models.reduce<Record<string, ModelInfo[]>>((acc, m) => {
-    const key = m.provider || "other";
-    (acc[key] ??= []).push(m);
-    return acc;
-  }, {});
-  const providerNames = Object.keys(grouped);
-
-  const ModelOptgroups = () => (
-    <>
-      {providerNames.map((prov) => (
-        <optgroup key={prov} label={formatProviderLabel(prov)}>
-          {grouped[prov].map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </>
-  );
-
-  // Find the active provider (the one with a key configured)
   const activeProviders = providers.filter((p) => p.source !== null);
   const inactiveProviders = providers.filter((p) => p.source === null);
-
-  // Models from active providers only (for simple view dropdown)
-  const activeProviderIds = new Set(activeProviders.map((p) => p.id));
-  const activeModels = models.filter((m) => activeProviderIds.has(m.provider));
+  const filteredProviderNames = Object.keys(filteredGalleryModels);
 
   return (
     <div className="settings-tab">
@@ -182,25 +196,13 @@ function ModelsTab() {
           </div>
         ) : (
           <div className="settings-field">
-            <div className="settings-select-wrapper">
-              <select
-                className="settings-select"
-                value={defaultModel}
-                onChange={(e) => saveDefaultModel(e.target.value)}
-              >
-                <option value="">Auto (recommended)</option>
-                {providerNames
-                  .filter((prov) => activeProviderIds.has(prov))
-                  .map((prov) => (
-                    <optgroup key={prov} label={formatProviderLabel(prov)}>
-                      {grouped[prov].map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-              </select>
-              <IconChevronDown size={14} className="settings-select-icon" />
-            </div>
+            <SearchableModelSelect
+              models={activeModels}
+              grouped={activeGrouped}
+              value={defaultModel}
+              onChange={saveDefaultModel}
+              placeholder="Auto (recommended)"
+            />
             {defaultModel && models.find((m) => m.id === defaultModel) && (
               <div className="model-details">
                 <ModelCard model={models.find((m) => m.id === defaultModel)!} formatPrice={formatPrice} />
@@ -224,8 +226,8 @@ function ModelsTab() {
 
       {advancedOpen && (
         <div className="settings-advanced-panel">
-          {/* Per-skill overrides */}
-          {skills.length > 0 && models.length > 0 && (
+          {/* Per-skill overrides — also filtered to active providers */}
+          {skills.length > 0 && activeModels.length > 0 && (
             <SettingsSection
               title="Per-Skill Model Overrides"
               description="Assign a specific model to individual skills. Leave empty to use the default."
@@ -234,16 +236,14 @@ function ModelsTab() {
                 {skills.map((skill) => (
                   <div key={skill.id} className="override-row">
                     <div className="override-skill">{skill.name || skill.id}</div>
-                    <div className="settings-select-wrapper override-select">
-                      <select
-                        className="settings-select"
+                    <div className="override-select">
+                      <SearchableModelSelect
+                        models={activeModels}
+                        grouped={activeGrouped}
                         value={overrides[skill.id] || ""}
-                        onChange={(e) => saveOverride(skill.id, e.target.value)}
-                      >
-                        <option value="">Default</option>
-                        <ModelOptgroups />
-                      </select>
-                      <IconChevronDown size={14} className="settings-select-icon" />
+                        onChange={(v) => saveOverride(skill.id, v)}
+                        placeholder="Default"
+                      />
                     </div>
                   </div>
                 ))}
@@ -251,19 +251,32 @@ function ModelsTab() {
             </SettingsSection>
           )}
 
-          {/* Model gallery */}
-          {models.length > 0 && (
-            <SettingsSection title="All Available Models" description="Models available across your configured providers.">
-              {providerNames.map((prov) => (
-                <div key={prov} className="provider-group">
-                  <h3 className="provider-group-label">{formatProviderLabel(prov)}</h3>
-                  <div className="model-grid">
-                    {grouped[prov].map((m) => (
-                      <ModelCard key={m.id} model={m} formatPrice={formatPrice} />
-                    ))}
+          {/* Model gallery — active providers only, with search */}
+          {activeModels.length > 0 && (
+            <SettingsSection title="All Available Models" description="Models from your connected providers.">
+              {activeModels.length > 10 && (
+                <input
+                  className="settings-input model-search-input"
+                  type="text"
+                  placeholder="Search models..."
+                  value={gallerySearch}
+                  onChange={(e) => setGallerySearch(e.target.value)}
+                />
+              )}
+              {filteredProviderNames.length === 0 ? (
+                <div className="settings-empty-state">No models match your search.</div>
+              ) : (
+                filteredProviderNames.map((prov) => (
+                  <div key={prov} className="provider-group">
+                    <h3 className="provider-group-label">{formatProviderLabel(prov)}</h3>
+                    <div className="model-grid">
+                      {filteredGalleryModels[prov].map((m) => (
+                        <ModelCard key={m.id} model={m} formatPrice={formatPrice} />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </SettingsSection>
           )}
         </div>
@@ -572,6 +585,144 @@ function ModelCard({
         <span>In: {fmt(model.input_price)}</span>
         <span>Out: {fmt(model.output_price)}</span>
       </div>
+    </div>
+  );
+}
+
+/* ─── Searchable Model Select ─── */
+
+function SearchableModelSelect({
+  models,
+  grouped,
+  value,
+  onChange,
+  placeholder = "Select a model",
+}: {
+  models: ModelInfo[];
+  grouped: Record<string, ModelInfo[]>;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Focus input when opened
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
+
+  const selectedModel = models.find((m) => m.id === value);
+  const displayLabel = selectedModel ? selectedModel.name : placeholder;
+
+  const filteredGrouped = useMemo(() => {
+    if (!search.trim()) return grouped;
+    const q = search.toLowerCase();
+    const result: Record<string, ModelInfo[]> = {};
+    for (const [prov, ms] of Object.entries(grouped)) {
+      const filtered = ms.filter(
+        (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
+      );
+      if (filtered.length > 0) result[prov] = filtered;
+    }
+    return result;
+  }, [grouped, search]);
+
+  const filteredProviders = Object.keys(filteredGrouped);
+  const totalFiltered = filteredProviders.reduce((n, p) => n + filteredGrouped[p].length, 0);
+
+  const select = (modelId: string) => {
+    onChange(modelId);
+    setOpen(false);
+    setSearch("");
+  };
+
+  return (
+    <div className="sms-container" ref={containerRef}>
+      <button
+        className="sms-trigger"
+        onClick={() => setOpen(!open)}
+        type="button"
+      >
+        <span className={value ? "sms-trigger-label" : "sms-trigger-placeholder"}>
+          {displayLabel}
+        </span>
+        <IconChevronDown size={14} className="sms-trigger-icon" />
+      </button>
+
+      {open && (
+        <div className="sms-dropdown">
+          <div className="sms-search-wrapper">
+            <input
+              ref={inputRef}
+              className="sms-search"
+              type="text"
+              placeholder="Search models..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { setOpen(false); setSearch(""); }
+              }}
+            />
+            {search && (
+              <button
+                className="sms-search-clear"
+                onClick={() => setSearch("")}
+                type="button"
+              >
+                <IconX size={12} />
+              </button>
+            )}
+          </div>
+
+          <div className="sms-options">
+            {/* Empty / default option */}
+            <button
+              className={`sms-option ${!value ? "sms-option-active" : ""}`}
+              onClick={() => select("")}
+              type="button"
+            >
+              {placeholder}
+            </button>
+
+            {totalFiltered === 0 ? (
+              <div className="sms-empty">No models match "{search}"</div>
+            ) : (
+              filteredProviders.map((prov) => (
+                <div key={prov} className="sms-group">
+                  <div className="sms-group-label">{formatProviderLabel(prov)}</div>
+                  {filteredGrouped[prov].map((m) => (
+                    <button
+                      key={m.id}
+                      className={`sms-option ${m.id === value ? "sms-option-active" : ""}`}
+                      onClick={() => select(m.id)}
+                      type="button"
+                    >
+                      <span className="sms-option-name">{m.name}</span>
+                      <span className="sms-option-id">{m.id}</span>
+                    </button>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
