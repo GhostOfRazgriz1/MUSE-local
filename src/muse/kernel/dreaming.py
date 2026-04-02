@@ -137,7 +137,10 @@ class DreamingManager:
                     '  "value": the fact or knowledge to remember\n'
                     "}\n\n"
                     "Guidelines:\n"
-                    "- _profile: user preferences, role, expertise, habits\n"
+                    "- _profile: user preferences, role, expertise, habits, "
+                    "people in the user's life (family, friends, partners, "
+                    "colleagues, pets) and their traits, interests, or "
+                    "occupations, and personal details mentioned in passing\n"
                     "- _project: project decisions, tech stack, constraints, deadlines\n"
                     "- _facts: research findings, key data, important conclusions\n"
                     "- _emotions: life events the user mentioned (job interviews, "
@@ -149,7 +152,8 @@ class DreamingManager:
                     "- Skip ephemeral info (greetings, task status, errors)\n"
                     "- Skip things that are obvious from code or git history\n"
                     "- Each value should be self-contained and useful in isolation\n"
-                    "- Be selective — only extract genuinely useful knowledge\n\n"
+                    "- Extract personal facts even when mentioned casually "
+                    "(e.g. 'my dad golfs' → remember the dad golfs)\n\n"
                     "Reply with ONLY a JSON array. No markdown, no explanation."
                 )},
                 {"role": "user", "content": conv_text},
