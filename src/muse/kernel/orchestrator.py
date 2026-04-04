@@ -357,8 +357,8 @@ class Orchestrator:
         # Start periodic cache flush
         asyncio.create_task(self._periodic_cache_flush())
 
-        # Dreaming disabled for local models (requires strong LLM)
-        # self._dreaming.start()
+        # Start memory consolidation ("dreaming") background task
+        self._dreaming.start()
 
         # Start background task scheduler
         self._scheduler.start()

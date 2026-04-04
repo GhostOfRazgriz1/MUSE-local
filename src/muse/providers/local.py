@@ -59,8 +59,16 @@ class LocalProvider(OpenAICompatibleProvider):
         super().__init__(
             name=name,
             api_key="",
-            base_url=base_url or _KNOWN_ENDPOINTS[0][1],
+            base_url=base_url or "http://localhost:11434/v1",
             env_var="",
+        )
+        # Override the httpx client with no total timeout — local models
+        # are slow but reliable, they don't hang like cloud APIs can.
+        # Keep the connect timeout so we fail fast if the server is down.
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            headers={"Content-Type": "application/json"},
+            timeout=httpx.Timeout(None, connect=LLM_TIMEOUT_CONNECT),
         )
         self._detected_runtime: str | None = None
 

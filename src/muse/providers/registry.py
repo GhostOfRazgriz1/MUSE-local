@@ -1,13 +1,8 @@
 """Provider registry — routes model IDs to the correct provider instance.
 
 Model IDs use the convention ``{provider}/{model_name}`` (e.g.
-``openai/gpt-4o``, ``anthropic/claude-sonnet-4``).  The registry splits on the
-first ``/``, looks up the provider prefix, and forwards the remainder as the
-API model name.
-
-If no direct provider is registered for a prefix the request falls through to
-the *fallback* provider (typically OpenRouter, which natively accepts the same
-``provider/model`` format).
+``local/llama3.2``).  The registry splits on the first ``/``, looks up the
+provider prefix, and forwards the remainder as the API model name.
 """
 
 from __future__ import annotations

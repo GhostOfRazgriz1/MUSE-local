@@ -126,53 +126,32 @@ class DreamingManager:
         extract_task = self._orch._provider.complete(
             model=model,
             messages=[
-                {"role": "system", "content": (
-                    "You are a memory consolidation system. Review this "
-                    "conversation and extract durable knowledge worth "
-                    "remembering for future sessions.\n\n"
-                    "Output a JSON array of memory entries. Each entry:\n"
-                    "{\n"
-                    '  "namespace": one of "_profile", "_project", "_facts", "_emotions",\n'
-                    '  "key": short slug (e.g. "user-prefers-dark-mode"),\n'
-                    '  "value": the fact or knowledge to remember\n'
-                    "}\n\n"
-                    "Guidelines:\n"
-                    "- _profile: user preferences, role, expertise, habits, "
-                    "people in the user's life (family, friends, partners, "
-                    "colleagues, pets) and their traits, interests, or "
-                    "occupations, and personal details mentioned in passing\n"
-                    "- _project: project decisions, tech stack, constraints, deadlines\n"
-                    "- _facts: research findings, key data, important conclusions\n"
-                    "- _emotions: life events the user mentioned (job interviews, "
-                    "deadlines, celebrations, health, travel, etc.) along with "
-                    "how they seemed to feel about them. Format the value as a "
-                    "natural sentence, e.g. 'User mentioned an upcoming job "
-                    "interview and seemed nervous about it' or 'User was excited "
-                    "about launching their new project'.\n"
-                    "- Skip ephemeral info (greetings, task status, errors)\n"
-                    "- Skip things that are obvious from code or git history\n"
-                    "- Each value should be self-contained and useful in isolation\n"
-                    "- Extract personal facts even when mentioned casually "
-                    "(e.g. 'my dad golfs' → remember the dad golfs)\n\n"
-                    "Reply with ONLY a JSON array. No markdown, no explanation."
+                {"role": "user", "content": (
+                    f"Conversation:\n{conv_text}\n\n"
+                    "Extract facts worth remembering. JSON array:\n"
+                    '[{"namespace":"_profile","key":"user-likes-coffee","value":"User prefers coffee over tea"}]\n\n'
+                    "Namespaces:\n"
+                    "- _profile: user preferences, habits, people in their life\n"
+                    "- _project: project decisions, tech stack, deadlines\n"
+                    "- _facts: key findings, important data\n"
+                    "- _emotions: how user felt about events\n\n"
+                    "Skip greetings and task status. Reply with ONLY a JSON array."
                 )},
-                {"role": "user", "content": conv_text},
             ],
-            max_tokens=1500,
+            system="Extract memorable facts from the conversation. Reply with ONLY a valid JSON array.",
+            max_tokens=1000,
         )
 
         summary_task = self._orch._provider.complete(
             model=model,
             messages=[
-                {"role": "system", "content": (
-                    "Write a brief summary of this conversation session "
-                    "(2-3 sentences). Focus on what was accomplished and "
-                    "any important decisions made. This will be used to "
-                    "provide context in future sessions."
+                {"role": "user", "content": (
+                    f"Conversation:\n{conv_text}\n\n"
+                    "Write a 2-3 sentence summary. What was accomplished? Any decisions made?"
                 )},
-                {"role": "user", "content": conv_text},
             ],
-            max_tokens=200,
+            system="Summarize the conversation in 2-3 sentences.",
+            max_tokens=150,
         )
 
         result, summary_result = await _aio.gather(extract_task, summary_task)
@@ -291,28 +270,17 @@ class DreamingManager:
             result = await self._orch._provider.complete(
                 model=model,
                 messages=[
-                    {"role": "system", "content": (
-                        "You are analyzing user behavior patterns for a personal "
-                        "AI assistant. Based on the usage data, generate actionable "
-                        "suggestions the agent could proactively offer.\n\n"
-                        "Output a JSON array of suggestions. Each suggestion:\n"
-                        "{\n"
-                        '  "type": "automate" | "remind" | "optimize" | "inform",\n'
-                        '  "message": the suggestion to show the user,\n'
-                        '  "skill_id": skill to use (if applicable),\n'
-                        '  "confidence": 0.0-1.0 how confident you are this is useful\n'
-                        "}\n\n"
-                        "Only suggest things with clear evidence from the data. "
-                        "Don't suggest things the user already does well. "
-                        "Max 3 suggestions.\n\n"
-                        "Reply with ONLY a JSON array. No markdown."
-                    )},
                     {"role": "user", "content": (
-                        f"Current session:\n{pattern_summary}\n"
-                        f"{history_summary}"
+                        f"Usage data:\n{pattern_summary}\n"
+                        f"{history_summary}\n\n"
+                        "Suggest 0-3 actions based on the data. JSON array:\n"
+                        '[{"type":"remind","message":"...","skill_id":"...","confidence":0.8}]\n\n'
+                        "Types: automate, remind, optimize, inform.\n"
+                        "Only suggest with clear evidence. Reply with ONLY a JSON array."
                     )},
                 ],
-                max_tokens=500,
+                system="Generate suggestions from usage patterns. Reply with ONLY a valid JSON array.",
+                max_tokens=300,
             )
 
             raw = result.text.strip()
