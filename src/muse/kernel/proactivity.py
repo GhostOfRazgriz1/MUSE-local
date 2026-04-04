@@ -205,22 +205,19 @@ class ProactivityManager:
             result = await self._orch._provider.complete(
                 model=model,
                 messages=[
-                    {"role": "system", "content": (
-                        "You are a proactive assistant. The user just completed a task. "
-                        "Based on the result, suggest ONE natural follow-up action they "
-                        "might want to take. Keep it brief (one sentence).\n\n"
-                        f"Available skills:\n{skill_catalog}\n\n"
-                        "Reply with JSON: {\"suggestion\": \"...\", \"skill_id\": \"...\"}\n"
-                        "If no useful follow-up exists, reply: {\"suggestion\": null}\n"
-                        "Reply with ONLY JSON."
-                    )},
                     {"role": "user", "content": (
-                        f"Completed: {skill_id}"
+                        f"Task done: {skill_id}"
                         f"{('.' + action) if action else ''}\n"
-                        f"Result: {result_summary[:500]}"
+                        f"Result: {result_summary[:300]}\n\n"
+                        f"Skills:\n{skill_catalog}\n\n"
+                        "Suggest ONE follow-up or null.\n"
+                        "JSON only:\n"
+                        '{"suggestion":"...","skill_id":"..."}\n'
+                        'or {"suggestion":null}'
                     )},
                 ],
-                max_tokens=150,
+                system="Suggest a follow-up action. Reply with ONLY valid JSON.",
+                max_tokens=100,
             )
 
             raw = result.text.strip()
@@ -299,21 +296,18 @@ class ProactivityManager:
             result = await self._orch._provider.complete(
                 model=model,
                 messages=[
-                    {"role": "system", "content": (
-                        "You are a proactive personal assistant. The user is connected "
-                        "but idle. Based on the context, suggest ONE helpful action.\n\n"
-                        f"Available skills:\n{skill_catalog}\n\n"
-                        "Reply with JSON: {\"message\": \"...\", \"skill_id\": \"...\", "
-                        "\"type\": \"remind|optimize|inform\"}\n"
-                        "If nothing useful to suggest, reply: {\"message\": null}\n"
-                        "Be specific and actionable. Reply with ONLY JSON."
-                    )},
                     {"role": "user", "content": (
                         f"{time_ctx}\n{pattern_summary}"
-                        f"{reminder_ctx}{profile_ctx}"
+                        f"{reminder_ctx}{profile_ctx}\n\n"
+                        f"Skills:\n{skill_catalog}\n\n"
+                        "Suggest ONE action or null.\n"
+                        "JSON only:\n"
+                        '{"message":"...","skill_id":"...","type":"remind"}\n'
+                        'or {"message":null}'
                     )},
                 ],
-                max_tokens=150,
+                system="Suggest a helpful action. Reply with ONLY valid JSON.",
+                max_tokens=100,
             )
 
             raw = result.text.strip()
@@ -416,26 +410,19 @@ class ProactivityManager:
             result = await self._orch._provider.complete(
                 model=model,
                 messages=[
-                    {"role": "system", "content": (
-                        "You are deciding if the AI agent should take an autonomous "
-                        "background action. The user has explicitly allowed these "
-                        f"skills to run autonomously: {safe_allowed}\n\n"
-                        f"Available skills:\n{skill_catalog}\n\n"
-                        "Based on the time and context, suggest 0-2 actions. Each:\n"
-                        "{\"skill_id\": \"...\", \"instruction\": \"...\", "
-                        "\"reason\": \"why this is useful now\"}\n\n"
-                        "Only suggest actions from the allowed list. "
-                        "Only suggest if there's a clear reason (time-based, "
-                        "pattern-based, or information that would become stale).\n\n"
-                        "Reply with a JSON array. Empty array if nothing useful."
-                    )},
                     {"role": "user", "content": (
                         f"Time: {now.strftime('%A %H:%M')} ({self._orch._user_tz})\n"
                         f"Patterns: {pattern_summary}\n"
-                        f"Allowed skills: {safe_allowed}"
+                        f"Allowed: {safe_allowed}\n\n"
+                        f"Skills:\n{skill_catalog}\n\n"
+                        "Suggest 0-2 autonomous actions from the allowed list.\n"
+                        "JSON array:\n"
+                        '[{"skill_id":"...","instruction":"...","reason":"..."}]\n'
+                        "or [] if nothing useful."
                     )},
                 ],
-                max_tokens=300,
+                system="Suggest autonomous actions. Reply with ONLY a valid JSON array.",
+                max_tokens=200,
             )
 
             raw = result.text.strip()
@@ -777,26 +764,21 @@ class ProactivityManager:
             result = await self._orch._provider.complete(
                 model=model,
                 messages=[
-                    {"role": "system", "content": (
-                        f"You are {agent_name}, a personal AI assistant. "
-                        f"Compose a brief, natural greeting for the user"
-                        f"{(' named ' + user_name) if user_name else ''}. "
-                        f"The user's local time is {time_str}. "
-                        f"Greet them as if it's {time_of_day}.\n\n"
-                        f"Your personality: {personality}\n\n"
-                        "Weave in any relevant context naturally — don't list "
-                        "items as bullet points, instead mention them conversationally. "
-                        "If there are background updates or reminders, mention them. "
-                        "If you have suggestions, offer ONE as a natural question.\n\n"
-                        "Keep it to 2-4 sentences. Be warm but concise. "
-                        "Use the user's local time as the only time reference — "
-                        "never mention other timezones or what time it is elsewhere."
-                        + (f"\n\nRespond in {self._orch._user_language}."
-                           if self._orch._user_language else "")
+                    {"role": "user", "content": (
+                        f"Write a greeting as {agent_name}"
+                        f"{(' for ' + user_name) if user_name else ''}.\n"
+                        f"Time: {time_str} ({time_of_day})\n\n"
+                        f"Context:\n{context_block}\n\n"
+                        "2-3 sentences. Mention any reminders or updates naturally."
                     )},
-                    {"role": "user", "content": context_block},
                 ],
-                max_tokens=200,
+                system=(
+                    f"You are {agent_name}. Write a short, warm greeting. "
+                    f"2-3 sentences max. No bullet points."
+                    + (f" Respond in {self._orch._user_language}."
+                       if self._orch._user_language else "")
+                ),
+                max_tokens=150,
             )
 
             greeting = result.text.strip()

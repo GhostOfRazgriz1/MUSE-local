@@ -33,6 +33,8 @@ _ALLOWED_KEY_PREFIXES = (
     "user_name",
     "user_city",
     "language",
+    "local_server",
+    "max_concurrent_tasks",
 )
 
 # OAuth client IDs are safe to store in user_settings (not secret).
@@ -63,6 +65,143 @@ async def get_settings():
         rows = await cursor.fetchall()
     return {"settings": {row[0]: row[1] for row in rows}}
 
+
+# ------------------------------------------------------------------
+# Local server configuration (MUST be before the /{key} catch-all)
+# ------------------------------------------------------------------
+
+_DEFAULT_PORTS = {
+    "ollama": 11434,
+    "vllm": 8000,
+    "llama.cpp": 8080,
+    "other": 8000,
+}
+
+
+@router.get("/local")
+async def get_local_config():
+    """Return the stored local server configuration."""
+    orchestrator = get_orchestrator()
+    if not orchestrator:
+        return {"config": None}
+
+    try:
+        async with orchestrator._db.execute(
+            "SELECT value FROM user_settings WHERE key = 'local_server'"
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            return {"config": json.loads(row[0])}
+    except Exception:
+        pass
+    return {"config": None}
+
+
+@router.put("/local")
+async def set_local_config(body: dict):
+    """Save local server configuration and hot-reload the provider.
+
+    Body: ``{"runtime": "ollama", "address": "localhost", "port": 11434,
+             "models": ["llama3.2", "gemma2"], "max_workers": 2}``
+    """
+    orchestrator = get_orchestrator()
+    if not orchestrator:
+        raise HTTPException(503, "Not ready")
+
+    runtime = body.get("runtime", "ollama")
+    address = body.get("address", "localhost").strip()
+    port = int(body.get("port", _DEFAULT_PORTS.get(runtime, 8000)))
+    model_names = body.get("models", [])
+    max_workers = int(body.get("max_workers", 2))
+
+    if not address:
+        raise HTTPException(400, "address is required")
+    if not model_names:
+        raise HTTPException(400, "At least one model name is required")
+    if max_workers < 1:
+        max_workers = 1
+    if max_workers > 16:
+        max_workers = 16
+
+    config_data = {
+        "runtime": runtime,
+        "address": address,
+        "port": port,
+        "models": model_names,
+        "max_workers": max_workers,
+    }
+
+    # Persist
+    now = datetime.now(timezone.utc).isoformat()
+    await orchestrator._db.execute(
+        "INSERT INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        ("local_server", json.dumps(config_data), now),
+    )
+    await orchestrator._db.commit()
+
+    # Hot-reload the local provider with the new URL
+    base_url = f"http://{address}:{port}/v1"
+
+    from muse.providers.local import LocalProvider
+    from muse.providers.registry import ProviderRegistry
+
+    registry: ProviderRegistry = orchestrator._provider
+    old = registry.providers.get("local")
+    if old is not None and hasattr(old, "close"):
+        await old.close()
+
+    new_prov = LocalProvider(base_url=base_url, name="local")
+    registry.register("local", new_prov)
+
+    # Update max concurrent tasks
+    orchestrator._task_manager._max_concurrent = max_workers
+
+    # Auto-select first model as default
+    if model_names:
+        default_model = f"local/{model_names[0]}"
+        orchestrator._model_router.default_model = default_model
+        orchestrator._classifier.set_provider(orchestrator._provider, default_model)
+
+        # Persist default model
+        await orchestrator._db.execute(
+            "INSERT INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            ("default_model", default_model, now),
+        )
+        await orchestrator._db.commit()
+
+    logger.info("Local server reconfigured: %s (%s) with %d models, %d workers",
+                runtime, base_url, len(model_names), max_workers)
+
+    return {"status": "configured", "base_url": base_url, "models": model_names}
+
+
+@router.post("/local/test")
+async def test_local_connection(body: dict):
+    """Test connectivity to a local LLM server without saving config."""
+    address = body.get("address", "localhost").strip()
+    port = int(body.get("port", 11434))
+    base_url = f"http://{address}:{port}/v1"
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            resp = await client.get(f"{base_url}/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("id", "") for m in data.get("data", [])]
+                return {"status": "ok", "models": models}
+            return {"status": "error", "message": f"Server returned {resp.status_code}"}
+    except httpx.ConnectError:
+        return {"status": "error", "message": f"Cannot connect to {base_url}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ------------------------------------------------------------------
+# Generic settings
+# ------------------------------------------------------------------
 
 @router.put("/{key}")
 async def set_setting(key: str, body: dict):
@@ -115,18 +254,14 @@ async def list_models():
 
     try:
         models = await orchestrator._provider.list_models()
-        # Direct-registered prefixes — any model whose prefix isn't here
-        # is served by the fallback provider (OpenRouter).
-        direct_prefixes = set(orchestrator._provider.providers.keys())
         result = []
         for m in models:
-            prefix = m.id.split("/")[0] if "/" in m.id else "other"
-            served_by = prefix if prefix in direct_prefixes else "openrouter"
+            prefix = m.id.split("/")[0] if "/" in m.id else "local"
             result.append({
                 "id": m.id,
                 "name": m.name,
                 "provider": prefix,
-                "served_by": served_by,
+                "served_by": "local",
                 "context_window": m.context_window,
                 "input_price": m.input_price_per_token,
                 "output_price": m.output_price_per_token,
@@ -192,18 +327,22 @@ async def list_providers():
 
     providers = []
     for prefix, pdef in BUILTIN_PROVIDERS.items():
-        has_env = bool(os.environ.get(pdef.env_var))
         is_registered = prefix in registered
-        has_vault = False
-        if orchestrator:
-            stored = await orchestrator._vault.retrieve_raw(f"{prefix}_api_key")
-            has_vault = stored is not None
-        if has_vault:
-            source = "vault"
-        elif has_env or is_registered:
-            source = "env"
+        # Local provider is always "connected" — no API key needed.
+        if not pdef.env_var:
+            source = "env" if is_registered else None
         else:
-            source = None
+            has_env = bool(os.environ.get(pdef.env_var))
+            has_vault = False
+            if orchestrator:
+                stored = await orchestrator._vault.retrieve_raw(f"{prefix}_api_key")
+                has_vault = stored is not None
+            if has_vault:
+                source = "vault"
+            elif has_env or is_registered:
+                source = "env"
+            else:
+                source = None
         providers.append({
             "id": prefix,
             "name": pdef.name,

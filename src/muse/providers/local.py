@@ -18,13 +18,6 @@ from .openai_compat import OpenAICompatibleProvider
 
 logger = logging.getLogger(__name__)
 
-# Well-known local server endpoints to probe in order of preference.
-_KNOWN_ENDPOINTS = [
-    ("ollama", "http://localhost:11434/v1"),
-    ("vllm", "http://localhost:8000/v1"),
-    ("llama.cpp", "http://localhost:8080/v1"),
-]
-
 # Model name patterns that indicate vision/video capabilities.
 _VISION_MODEL_PATTERNS = (
     "gemma4", "gemma-4", "gemma4:", "gemma-4:",
@@ -84,39 +77,31 @@ class LocalProvider(OpenAICompatibleProvider):
             return False
 
     async def detect_runtime(self) -> str | None:
-        """Probe known endpoints and reconfigure to the first that responds.
+        """Check if the configured endpoint is reachable.
 
-        Returns the runtime name ("ollama", "vllm", "llama.cpp") or None.
+        Returns the runtime name or None. Does NOT probe other endpoints —
+        the server URL is set explicitly via the setup card.
         """
         if self._detected_runtime:
             return self._detected_runtime
 
-        for runtime_name, endpoint in _KNOWN_ENDPOINTS:
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(3.0, connect=LLM_TIMEOUT_CONNECT),
-                ) as probe:
-                    resp = await probe.get(f"{endpoint}/models")
-                    if resp.status_code == 200:
-                        # Reconfigure client to this endpoint
-                        await self._client.aclose()
-                        self._base_url = endpoint
-                        self._client = httpx.AsyncClient(
-                            base_url=endpoint,
-                            headers={"Content-Type": "application/json"},
-                            timeout=httpx.Timeout(120.0, connect=LLM_TIMEOUT_CONNECT),
-                        )
-                        self._model_cache = None
-                        self._detected_runtime = runtime_name
-                        logger.info(
-                            "Detected local LLM runtime: %s at %s",
-                            runtime_name, endpoint,
-                        )
-                        return runtime_name
-            except httpx.HTTPError:
-                continue
+        try:
+            response = await self._client.get("/models")
+            if response.status_code == 200:
+                # Infer runtime from the configured URL
+                url = self._base_url.lower()
+                if "11434" in url:
+                    self._detected_runtime = "ollama"
+                elif "8080" in url:
+                    self._detected_runtime = "llama.cpp"
+                else:
+                    self._detected_runtime = "vllm"
+                logger.info("Local LLM runtime reachable at %s", self._base_url)
+                return self._detected_runtime
+        except httpx.HTTPError:
+            pass
 
-        logger.debug("No local LLM runtime detected.")
+        logger.debug("Local LLM server not reachable at %s", self._base_url)
         return None
 
     # ------------------------------------------------------------------

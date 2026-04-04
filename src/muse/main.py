@@ -56,88 +56,39 @@ async def create_orchestrator(config: Config | None = None):
     trust_budget = TrustBudgetManager(db)
     permission_manager = PermissionManager(permission_repo, trust_budget)
 
-    # LLM Providers
+    # LLM Providers — local only
     from muse.config import BUILTIN_PROVIDERS
-    from muse.providers.openrouter import OpenRouterProvider
-    from muse.providers.openai_compat import OpenAICompatibleProvider
-    from muse.providers.anthropic import AnthropicProvider
     from muse.providers.registry import ProviderRegistry
     from muse.providers.model_router import ModelRouter
+    from muse.providers.local import LocalProvider
 
-    # Credential vault — the sole source of truth for API keys.
-    # Keys are managed via Settings > Models > API Keys in the UI.
     from muse.credentials.vault import CredentialVault
 
     credential_vault = CredentialVault(db)
 
-    # OpenRouter is the fallback for any model prefix without a direct provider.
-    openrouter_key = await credential_vault.retrieve("openrouter_api_key") or ""
-    openrouter = OpenRouterProvider(
-        api_key=openrouter_key, base_url=BUILTIN_PROVIDERS["openrouter"].base_url,
-    )
-    if openrouter_key:
-        logger.info("Loaded OpenRouter key from vault")
-    else:
-        logger.info("No OpenRouter key configured — add one in Settings")
+    registry = ProviderRegistry(fallback=None)
 
-    registry = ProviderRegistry(fallback=openrouter)
-
-    # Register direct providers from vault.
-    for prefix, pdef in BUILTIN_PROVIDERS.items():
-        if prefix == "openrouter":
-            continue  # already the fallback
-        # Local provider: no API key needed — register unconditionally
-        if not pdef.env_var:
-            from muse.providers.local import LocalProvider
-            local_prov = LocalProvider(base_url=pdef.base_url, name=pdef.name)
-            registry.register(prefix, local_prov)
-            logger.info("Registered local LLM provider: %s (%s)", prefix, pdef.base_url)
-            continue
-        stored_key = await credential_vault.retrieve(f"{prefix}_api_key")
-        if not stored_key:
-            continue
-        if pdef.api_style == "anthropic":
-            registry.register(prefix, AnthropicProvider(api_key=stored_key))
-        else:
-            registry.register(
-                prefix,
-                OpenAICompatibleProvider(
-                    name=pdef.name,
-                    api_key=stored_key,
-                    base_url=pdef.base_url,
-                    env_var=pdef.env_var,
-                ),
-            )
-        logger.info("Loaded %s key from vault", prefix)
-
-    # Register custom providers from user_settings.
+    # Load stored local server config (if any) or use defaults.
+    local_base_url = BUILTIN_PROVIDERS["local"].base_url
     try:
         import json as _json
         async with db.execute(
-            "SELECT value FROM user_settings WHERE key = 'custom_providers'"
+            "SELECT value FROM user_settings WHERE key = 'local_server'"
         ) as cursor:
             row = await cursor.fetchone()
         if row:
-            custom_providers = _json.loads(row[0])
-            for cp in custom_providers:
-                cp_id = cp["id"]
-                stored_key = await credential_vault.retrieve(f"{cp_id}_api_key")
-                if not stored_key:
-                    continue
-                if cp.get("api_style") == "anthropic":
-                    registry.register(cp_id, AnthropicProvider(api_key=stored_key))
-                else:
-                    registry.register(
-                        cp_id,
-                        OpenAICompatibleProvider(
-                            name=cp["name"],
-                            api_key=stored_key,
-                            base_url=cp["base_url"],
-                        ),
-                    )
-                logger.info("Loaded custom provider '%s' from vault", cp_id)
-    except Exception as e:
-        logger.debug("Custom provider loading skipped: %s", e)
+            local_cfg = _json.loads(row[0])
+            addr = local_cfg.get("address", "localhost")
+            port = local_cfg.get("port", 11434)
+            local_base_url = f"http://{addr}:{port}/v1"
+            logger.info("Loaded local server config: %s (runtime: %s)",
+                        local_base_url, local_cfg.get("runtime", "unknown"))
+    except Exception:
+        pass
+
+    local_prov = LocalProvider(base_url=local_base_url, name="local")
+    registry.register("local", local_prov)
+    logger.info("Registered local LLM provider: %s", local_base_url)
 
     provider = registry
 
@@ -154,23 +105,10 @@ async def create_orchestrator(config: Config | None = None):
     except Exception:
         pass
 
-    # Verify the default model's provider is actually registered.
-    # If not, pick the first model from whatever provider IS available.
-    default_prefix = saved_default_model.split("/")[0] if "/" in saved_default_model else ""
-    if default_prefix and default_prefix not in registry.providers:
-        available = list(registry.providers.keys())
-        if available:
-            picked = available[0]
-            try:
-                prov_models = await registry.providers[picked].list_models()
-                if prov_models:
-                    saved_default_model = f"{picked}/{prov_models[0].id}"
-                    logger.info(
-                        "Configured provider '%s' not available, auto-selected: %s",
-                        default_prefix, saved_default_model,
-                    )
-            except Exception:
-                logger.debug("Could not list models from %s for auto-selection", picked)
+    # If no model configured yet, leave as "local/auto" — the setup card
+    # will handle model selection on first launch.
+    if saved_default_model == "local/auto":
+        logger.info("No model configured yet — waiting for setup")
 
     # Don't mutate config (frozen dataclass) — pass the resolved model
     # directly to the router.

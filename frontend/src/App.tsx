@@ -98,16 +98,14 @@ function App() {
     if (sessionId) setSessionUpdateTrigger((n) => n + 1);
   }, [sessionId]);
 
-  // Check if any LLM provider is configured — if not, show setup card
+  // Check if local server is configured — if not, show setup card
   useEffect(() => {
-    apiFetch("/api/settings/providers")
+    apiFetch("/api/settings/local")
       .then((r) => r.json())
       .then((data) => {
-        const providers = data.providers || [];
-        const hasAny = providers.some((p: { source: string | null }) => p.source != null);
-        setNeedsSetup(!hasAny);
+        setNeedsSetup(data.config === null);
       })
-      .catch(() => setNeedsSetup(false)); // if server is down, skip setup card
+      .catch(() => setNeedsSetup(false));
   }, []);
 
   // Close task popover when clicking outside

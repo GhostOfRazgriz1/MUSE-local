@@ -51,19 +51,6 @@ class ClassifiedIntent:
     clarify_question: str = ""  # Set when mode == CLARIFY
 
 
-# Provider aliases — map common names to provider prefixes for "use X" matching.
-# Only needed for names that differ from the prefix itself.
-_PROVIDER_ALIASES: dict[str, str] = {
-    "claude": "anthropic",
-    "chatgpt": "openai",
-    "gpt": "openai",
-    "google": "gemini",
-    "qwen": "alibaba",
-    "doubao": "bytedance",
-}
-
-# Matches "use <keyword>" in user messages (e.g., "use deepseek", "use opus").
-_USE_RE = re.compile(r"\buse\s+([\w.-]+)", re.IGNORECASE)
 
 # Messages matching these are ALWAYS handled inline — no LLM call needed.
 _INLINE_RE = re.compile(
@@ -141,7 +128,6 @@ class SemanticIntentClassifier:
     ) -> ClassifiedIntent:
         """Classify intent via a single LLM call."""
         msg_lower = user_message.lower().strip()
-        model_override = await self._resolve_model_override(msg_lower)
 
         # ── Fast inline exit: greetings, thanks, meta-questions ──
         if _INLINE_RE.search(msg_lower):
@@ -149,72 +135,47 @@ class SemanticIntentClassifier:
             return ClassifiedIntent(
                 mode=ExecutionMode.INLINE,
                 task_description=user_message,
-                model_override=model_override,
             )
 
         if not self._skills or not self._provider or not self._default_model:
             return ClassifiedIntent(
                 mode=ExecutionMode.INLINE,
                 task_description=user_message,
-                model_override=model_override,
             )
 
         # ── Single LLM call for routing ─────────────────────────
         context_block = ""
         if conversation_context:
             context_block = (
-                f"Recent conversation context:\n{conversation_context}\n\n"
+                f"Context: {conversation_context}\n\n"
             )
 
         prompt = (
             f"{context_block}"
-            f"User message: \"{user_message}\"\n\n"
-            f"Available skills:\n{self._cached_skill_lines}\n\n"
-            f"Decide how to handle this message. Reply with JSON:\n"
-            f'{{"action": "none"}}  — general chat, no skill needed\n'
-            f'{{"action": "single", "skill": "<skill_id>"}}  — one skill handles it\n'
-            f'{{"action": "multi", "sub_tasks": ['
-            f'{{"skill_id": "...", "instruction": "...", "depends_on": []}},'
-            f"...]}}  — 2-3 tasks needed in a clear combination\n"
-            f'{{"action": "goal"}}  — complex goal requiring a multi-step plan '
-            f"(research + analysis + output, or any task needing 4+ steps)\n"
-            f'{{"action": "clarify", "question": "..."}}  — the request is ambiguous '
-            f"and you need to ask the user one short question before proceeding\n\n"
-            f"Reply with ONLY valid JSON."
+            f"User: \"{user_message}\"\n\n"
+            f"Skills:\n{self._cached_skill_lines}\n\n"
+            f"Pick ONE:\n"
+            f'{{"action":"none"}} — chat, no skill\n'
+            f'{{"action":"single","skill":"<id>"}} — use one skill\n'
+            f'{{"action":"multi","sub_tasks":[{{"skill_id":"...","instruction":"...","depends_on":[]}}]}} — 2-3 skills\n'
+            f'{{"action":"goal"}} — complex multi-step plan\n'
+            f'{{"action":"clarify","question":"..."}} — ask user to clarify\n\n'
+            f"JSON only:"
         )
 
         try:
             result = await self._provider.complete(
                 model=self._default_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
+                max_tokens=200,
                 system=(
-                    "You are a routing classifier for an AI agent. Your job is to "
-                    "decide which skill(s) should handle the user's request.\n\n"
-                    "DECISION FRAMEWORK:\n"
-                    "1. Focus on the user's INTENT, not keywords. 'Create a mathematical "
-                    "breakdown document' is a writing task (Files/Notes), not a coding "
-                    "task, even though it mentions math.\n"
-                    "2. A skill should only be used if the user wants its SPECIFIC "
-                    "capability — not because the topic is vaguely related.\n"
-                    "3. Code Runner is ONLY for executing code the user provides or "
-                    "for live computation (math, data processing, unit conversion). "
-                    "'Write/create/build me a game/app/script' is a FILES task — the "
-                    "user wants a saved file, not ephemeral execution output.\n"
-                    "4. If the user wants to CREATE content (reports, summaries, documents, "
-                    "breakdowns, analyses, programs, games), use Files to write it or "
-                    "Notes to save it.\n"
-                    "5. When in doubt between two skills, use 'clarify' to ask the user "
-                    "a SHORT question (one sentence). Only clarify when the ambiguity "
-                    "would lead to a meaningfully different action — don't clarify "
-                    "trivial details or things the skill can decide on its own.\n"
-                    "6. If the request is clearly conversational, a continuation of an "
-                    "ongoing chat, or you're unsure, use 'none' and let the agent "
-                    "respond directly.\n"
-                    "7. Use 'goal' when the user gives a high-level objective requiring "
-                    "4+ steps (research + analysis + output). Use 'multi' for simple "
-                    "2-3 skill combinations like 'search X and save a note'.\n\n"
-                    "Reply with ONLY valid JSON, no markdown, no explanation."
+                    "You route user messages to skills. Reply with ONLY valid JSON.\n\n"
+                    "Rules:\n"
+                    "- Chat/conversation → {{\"action\":\"none\"}}\n"
+                    "- Creating files/documents/code → use Files skill\n"
+                    "- Running code/math → use Code Runner skill\n"
+                    "- Unsure → {{\"action\":\"none\"}}\n"
+                    "- No markdown, no explanation, ONLY JSON."
                 ),
             )
 
@@ -252,8 +213,7 @@ class SemanticIntentClassifier:
                         skill_id=resolved,
                         action=resolved_action,
                         task_description=user_message,
-                        model_override=model_override,
-                        confidence=1.0,
+                                confidence=1.0,
                     )
                 else:
                     logger.warning("LLM returned unknown skill: %r", raw_skill)
@@ -295,8 +255,7 @@ class SemanticIntentClassifier:
                             skill_ids=skill_ids,
                             sub_tasks=sub_tasks,
                             task_description=user_message,
-                            model_override=model_override,
-                            confidence=1.0,
+                                        confidence=1.0,
                         )
 
             elif action == "goal":
@@ -304,8 +263,7 @@ class SemanticIntentClassifier:
                 return ClassifiedIntent(
                     mode=ExecutionMode.GOAL,
                     task_description=user_message,
-                    model_override=model_override,
-                    confidence=1.0,
+                        confidence=1.0,
                 )
 
             elif action == "clarify":
@@ -314,8 +272,7 @@ class SemanticIntentClassifier:
                 return ClassifiedIntent(
                     mode=ExecutionMode.CLARIFY,
                     task_description=user_message,
-                    model_override=model_override,
-                    clarify_question=question,
+                        clarify_question=question,
                 )
 
             # action == "none" or fallthrough
@@ -323,7 +280,6 @@ class SemanticIntentClassifier:
             return ClassifiedIntent(
                 mode=ExecutionMode.INLINE,
                 task_description=user_message,
-                model_override=model_override,
                 confidence=1.0,
             )
 
@@ -333,7 +289,6 @@ class SemanticIntentClassifier:
             return ClassifiedIntent(
                 mode=ExecutionMode.INLINE,
                 task_description=user_message,
-                model_override=model_override,
             )
 
     async def _resolve_action(
@@ -362,16 +317,12 @@ class SemanticIntentClassifier:
             result = await self._provider.complete(
                 model=self._default_model,
                 messages=[{"role": "user", "content": (
-                    f"User message: \"{user_message}\"\n\n"
-                    f"Available actions:\n{action_lines}\n\n"
-                    f"Which action best matches? Reply with ONLY the action id."
+                    f"User: \"{user_message}\"\n"
+                    f"Actions:\n{action_lines}\n"
+                    f"Reply with ONLY the action id."
                 )}],
                 max_tokens=20,
-                system=(
-                    "Pick the best action for the user's request. "
-                    "Reply with ONLY the action id (e.g. \"create\" or \"list\"). "
-                    "No explanation."
-                ),
+                system="Pick the best action. Reply with ONLY the action id. No explanation.",
             )
 
             picked = result.text.strip().strip('"\'.')
@@ -396,44 +347,3 @@ class SemanticIntentClassifier:
             logger.warning("Action resolution failed for %s: %s", skill_id, e)
             return None
 
-    # ------------------------------------------------------------------
-    # Dynamic model override resolution
-    # ------------------------------------------------------------------
-
-    async def _resolve_model_override(self, msg_lower: str) -> str | None:
-        """Resolve 'use X' in user message to an actual model from connected providers.
-
-        Matches provider names (e.g. 'use deepseek'), aliases (e.g. 'use claude'),
-        and model names (e.g. 'use opus') against actually available models.
-        """
-        match = _USE_RE.search(msg_lower)
-        if not match or not self._provider:
-            return None
-
-        keyword = match.group(1).strip().lower()
-
-        # Lazily populate model cache from all connected providers.
-        if not self._model_cache:
-            try:
-                all_models = await self._provider.list_models()
-                for m in all_models:
-                    prefix = m.id.split("/")[0] if "/" in m.id else "other"
-                    self._model_cache.setdefault(prefix, []).append(m)
-            except Exception:
-                logger.debug("Failed to populate model cache for override resolution")
-                return None
-
-        # Resolve keyword to a provider prefix via aliases.
-        prefix = _PROVIDER_ALIASES.get(keyword, keyword)
-
-        # 1. Provider-level match — pick the first model from that provider.
-        if prefix in self._model_cache:
-            return self._model_cache[prefix][0].id
-
-        # 2. Model-name search — match keyword against model names/IDs.
-        for models in self._model_cache.values():
-            for m in models:
-                if keyword in m.name.lower() or keyword in m.id.lower():
-                    return m.id
-
-        return None

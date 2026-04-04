@@ -169,15 +169,7 @@ class AssembledContext:
         if self.emotional_context:
             system_parts.append(f"\n{_sanitize_memory_value(self.emotional_context)}")
 
-        # Mood tag hint — only for user-facing inline responses, not
-        # skill execution, classification, or planning (saves ~40 tokens).
-        if self.include_mood_hint:
-            system_parts.append(
-                "\nYou may optionally end your response with [mood:X] where X is "
-                "one of: curious, amused, excited, concerned, neutral. "
-                "This sets your visible mood indicator. Only use this when the "
-                "mood is clearly appropriate — don't force it on every response."
-            )
+        # Mood hints disabled for local models (saves tokens, unreliable output).
 
         messages.append({"role": "system", "content": "\n".join(system_parts)})
 

@@ -6107,6 +6107,150 @@ textarea:focus-visible {
   line-height: 1.5;
 }
 
+/* ── Setup card: local server form ── */
+
+.setup-field {
+  margin-top: 12px;
+}
+
+.setup-field-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.setup-field-row > .setup-field {
+  margin-top: 0;
+}
+
+.setup-field-row > .setup-field:first-child {
+  flex: 1;
+}
+
+.setup-field-port {
+  width: 100px;
+}
+
+.setup-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color var(--transition-fast);
+  box-sizing: border-box;
+}
+
+.setup-input:focus {
+  border-color: var(--accent);
+}
+
+.setup-input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+}
+
+.setup-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.setup-input-sm {
+  width: 80px;
+}
+
+.setup-model-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.setup-model-row .setup-input {
+  flex: 1;
+}
+
+.setup-model-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.setup-model-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent);
+}
+
+.setup-model-tag button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.setup-model-tag button:hover {
+  opacity: 1;
+}
+
+.setup-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  margin-top: 8px;
+}
+
+.setup-status-ok {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.setup-status-err {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
+}
+
+.setup-test-btn {
+  margin-top: 8px;
+}
+
+.setup-instructions {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-top: 8px;
+  text-align: left;
+}
+
+.setup-instructions ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.setup-instructions code, .setup-instructions pre {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-elevated);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
 
 /* ══════════════════════════════════════════════════════════════
    PROACTIVITY UI

@@ -357,8 +357,8 @@ class Orchestrator:
         # Start periodic cache flush
         asyncio.create_task(self._periodic_cache_flush())
 
-        # Start memory consolidation ("dreaming") background task
-        self._dreaming.start()
+        # Dreaming disabled for local models (requires strong LLM)
+        # self._dreaming.start()
 
         # Start background task scheduler
         self._scheduler.start()
@@ -758,26 +758,18 @@ class Orchestrator:
         plan_result = await self._provider.complete(
             model=model,
             messages=[
-                {"role": "system", "content": (
-                    "You are revising an execution plan for an AI agent.\n\n"
-                    f"Available skills:\n{skill_catalog}\n\n"
-                    "Output a revised JSON array of ALL steps (completed + remaining).\n"
-                    "Completed steps MUST be preserved exactly as-is (same skill_id, "
-                    "instruction, depends_on). Only rewrite, add, or remove steps "
-                    "after the current step.\n\n"
-                    "Rules:\n"
-                    "- Maximum 8 total steps\n"
-                    "- depends_on indices reference the full array\n"
-                    "- Reply with ONLY a JSON array\n"
-                )},
                 {"role": "user", "content": (
-                    f"Original goal: {original_goal}\n\n"
-                    f"Completed steps:\n{completed_summary}\n\n"
-                    f"Remaining steps:\n{remaining_summary}\n\n"
-                    f"User steering: {combined}"
+                    f"Goal: {original_goal}\n\n"
+                    f"Done:\n{completed_summary}\n\n"
+                    f"Remaining:\n{remaining_summary}\n\n"
+                    f"User says: {combined}\n\n"
+                    f"Skills:\n{skill_catalog}\n\n"
+                    "Revise the plan. Keep completed steps as-is. "
+                    "Max 8 steps. Reply with ONLY a JSON array."
                 )},
             ],
-            max_tokens=800,
+            system="Revise the execution plan. Output ONLY a valid JSON array of steps.",
+            max_tokens=600,
         )
 
         import re as _re
@@ -1854,27 +1846,18 @@ class Orchestrator:
         plan_result = await self._provider.complete(
             model=model,
             messages=[
-                {"role": "system", "content": (
-                    "You are a task planner for an AI agent. Break the user's "
-                    "goal into concrete steps that the agent's skills can execute.\n\n"
-                    f"Available skills:\n{skill_catalog}\n\n"
-                    "Output a JSON array of steps. Each step:\n"
-                    "{\n"
-                    '  "skill_id": skill to use,\n'
-                    '  "action": specific action within the skill (or null),\n'
-                    '  "instruction": what to tell the skill,\n'
-                    '  "depends_on": [indices of prior steps this needs]\n'
-                    "}\n\n"
-                    f"Rules:\n"
-                    f"- Maximum {self.MAX_PLAN_STEPS} steps\n"
-                    f"- Each step should be a single skill invocation\n"
-                    f"- Use depends_on to chain results (e.g. search then save)\n"
-                    f"- Be specific in instructions — the skill needs to know exactly what to do\n\n"
-                    f"Reply with ONLY a JSON array. No markdown."
+                {"role": "user", "content": (
+                    f"Goal: {user_message}\n\n"
+                    f"Skills:\n{skill_catalog}\n\n"
+                    f"Break this into steps (max {self.MAX_PLAN_STEPS}). "
+                    "Each step uses one skill.\n\n"
+                    "JSON array format:\n"
+                    '[{"skill_id":"...","action":null,"instruction":"...","depends_on":[]}]\n\n'
+                    "Reply with ONLY a JSON array."
                 )},
-                {"role": "user", "content": user_message},
             ],
-            max_tokens=800,
+            system="Break the goal into steps. Output ONLY a valid JSON array.",
+            max_tokens=600,
         )
 
         import re

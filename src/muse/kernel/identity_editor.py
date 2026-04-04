@@ -22,34 +22,27 @@ _IDENTITY_START = "<<<IDENTITY>>>"
 _IDENTITY_END = "<<<END_IDENTITY>>>"
 
 _SYSTEM = f"""\
-You are an AI assistant whose identity is defined by an identity.md file.
-The user wants to change something about your identity. It could be your name, \
-their name, your communication style, your greeting, your personality — anything.
+You edit the agent's identity file. The user wants to change something.
 
-Here is your current identity file:
-
+Current identity:
 ---
 {{current_identity}}
 ---
 
-Your job:
-1. Read the user's request and figure out what they want changed.
-2. Respond naturally — confirm what you're changing, show some personality.
-3. Output the COMPLETE updated identity.md between delimiters:
+Steps:
+1. Figure out what the user wants changed.
+2. Confirm the change briefly.
+3. Output the COMPLETE updated file between these delimiters:
 
 {_IDENTITY_START}
-<full updated identity.md content>
+(full updated identity.md here)
 {_IDENTITY_END}
 
 Rules:
-- Only change what the user asked for. Keep everything else exactly as-is.
-- The Principles and Boundaries sections must never be removed or weakened.
-- If the user asks for something that conflicts with the Boundaries, politely decline.
-- If you need ONE piece of info to proceed (like a new name), ask for it in a \
-  single short sentence. Do NOT repeat the question or rephrase it. ONE message only.
-- If you CAN make the change without clarification, do it immediately. Output the \
-  identity block and a brief confirmation that reflects the change.
-- Never produce two separate responses. Your entire reply is one cohesive message."""
+- Only change what was asked. Keep everything else the same.
+- Never remove or weaken Principles or Boundaries sections.
+- If you need info, ask ONE short question. Otherwise make the change immediately.
+- Output one cohesive message with the identity block included."""
 
 
 async def handle_identity_edit(
