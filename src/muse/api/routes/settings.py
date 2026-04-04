@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from muse.api.app import get_orchestrator
+from muse.api.app import get_orchestrator, get_service
 from muse.config import BUILTIN_PROVIDERS
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ async def get_settings():
     if not orchestrator:
         return {"settings": {}}
 
-    async with orchestrator._db.execute("SELECT key, value FROM user_settings") as cursor:
+    async with get_service("db").execute("SELECT key, value FROM user_settings") as cursor:
         rows = await cursor.fetchall()
     return {"settings": {row[0]: row[1] for row in rows}}
 
@@ -85,7 +85,7 @@ async def get_local_config():
         return {"config": None}
 
     try:
-        async with orchestrator._db.execute(
+        async with get_service("db").execute(
             "SELECT value FROM user_settings WHERE key = 'local_server'"
         ) as cursor:
             row = await cursor.fetchone()
@@ -132,12 +132,12 @@ async def set_local_config(body: dict):
 
     # Persist
     now = datetime.now(timezone.utc).isoformat()
-    await orchestrator._db.execute(
+    await get_service("db").execute(
         "INSERT INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)"
         " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         ("local_server", json.dumps(config_data), now),
     )
-    await orchestrator._db.commit()
+    await get_service("db").commit()
 
     # Hot-reload the local provider with the new URL
     base_url = f"http://{address}:{port}/v1"
@@ -145,7 +145,7 @@ async def set_local_config(body: dict):
     from muse.providers.local import LocalProvider
     from muse.providers.registry import ProviderRegistry
 
-    registry: ProviderRegistry = orchestrator._provider
+    registry: ProviderRegistry = get_service("provider")
     old = registry.providers.get("local")
     if old is not None and hasattr(old, "close"):
         await old.close()
@@ -154,21 +154,21 @@ async def set_local_config(body: dict):
     registry.register("local", new_prov)
 
     # Update max concurrent tasks
-    orchestrator._task_manager._max_concurrent = max_workers
+    get_service("task_manager")._max_concurrent = max_workers
 
     # Auto-select first model as default
     if model_names:
         default_model = f"local/{model_names[0]}"
-        orchestrator._model_router.default_model = default_model
-        orchestrator._classifier.set_provider(orchestrator._provider, default_model)
+        get_service("model_router").default_model = default_model
+        get_service("classifier").set_provider(get_service("provider"), default_model)
 
         # Persist default model
-        await orchestrator._db.execute(
+        await get_service("db").execute(
             "INSERT INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)"
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             ("default_model", default_model, now),
         )
-        await orchestrator._db.commit()
+        await get_service("db").commit()
 
     logger.info("Local server reconfigured: %s (%s) with %d models, %d workers",
                 runtime, base_url, len(model_names), max_workers)
@@ -216,7 +216,7 @@ async def set_setting(key: str, body: dict):
 
     # Route OAuth client secrets to the vault instead of plaintext DB.
     if _OAUTH_CLIENT_SECRET_RE.match(key):
-        await orchestrator._vault.store(
+        await get_service("vault").store(
             credential_id=key,
             secret=str(value),
             credential_type="oauth_client_secret",
@@ -225,21 +225,21 @@ async def set_setting(key: str, body: dict):
         return {"key": key, "value": "(stored in vault)"}
 
     now = datetime.now(timezone.utc).isoformat()
-    await orchestrator._db.execute(
+    await get_service("db").execute(
         "INSERT OR REPLACE INTO user_settings (key, value, updated_at) VALUES (?, ?, ?)",
         (key, str(value), now),
     )
-    await orchestrator._db.commit()
+    await get_service("db").commit()
 
     # Hot-reload language preference so it takes effect immediately.
     if key == "language":
-        orchestrator._user_language = str(value).strip()
+        get_service("session").user_language = str(value).strip()
 
     # Hot-reload default model so the change takes effect immediately.
     if key == "default_model":
         model_id = str(value).strip()
-        orchestrator._model_router.default_model = model_id
-        orchestrator._classifier.set_provider(orchestrator._provider, model_id)
+        get_service("model_router").default_model = model_id
+        get_service("classifier").set_provider(get_service("provider"), model_id)
 
     return {"key": key, "value": value}
 
@@ -252,7 +252,7 @@ async def list_models():
         return {"models": []}
 
     try:
-        models = await orchestrator._provider.list_models()
+        models = await get_service("provider").list_models()
         result = []
         for m in models:
             prefix = m.id.split("/")[0] if "/" in m.id else "local"
@@ -276,7 +276,7 @@ async def get_model_overrides():
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"overrides": {}}
-    return {"overrides": await orchestrator._model_router.get_skill_overrides()}
+    return {"overrides": await get_service("model_router").get_skill_overrides()}
 
 
 @router.put("/models/overrides/{skill_id}")
@@ -285,7 +285,7 @@ async def set_model_override(skill_id: str, body: dict):
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"error": "Not ready"}
-    await orchestrator._model_router.set_skill_override(skill_id, body["model_id"])
+    await get_service("model_router").set_skill_override(skill_id, body["model_id"])
     return {"skill_id": skill_id, "model_id": body["model_id"]}
 
 
@@ -293,7 +293,7 @@ async def set_model_override(skill_id: str, body: dict):
 async def list_providers():
     """Return LLM providers and their status."""
     orchestrator = get_orchestrator()
-    registered = set(orchestrator._provider.providers.keys()) if orchestrator else set()
+    registered = set(get_service("provider").providers.keys()) if orchestrator else set()
 
     providers = []
     for prefix, pdef in BUILTIN_PROVIDERS.items():
@@ -318,7 +318,7 @@ async def list_credentials():
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"credentials": []}
-    return {"credentials": await orchestrator._vault.list_credentials()}
+    return {"credentials": await get_service("vault").list_credentials()}
 
 
 @router.post("/credentials")
@@ -327,7 +327,7 @@ async def store_credential(body: dict):
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"error": "Not ready"}
-    await orchestrator._vault.store(
+    await get_service("vault").store(
         credential_id=body["id"],
         secret=body["secret"],
         credential_type=body.get("type", "api_key"),
@@ -348,7 +348,7 @@ async def delete_credential(credential_id: str):
     orchestrator = get_orchestrator()
     if not orchestrator:
         return {"error": "Not ready"}
-    await orchestrator._vault.delete(credential_id)
+    await get_service("vault").delete(credential_id)
     # Re-evaluate skill routing without the removed credential
     try:
         await orchestrator.refresh_skill_registration()
