@@ -2343,10 +2343,13 @@ class Orchestrator:
         if manifest.is_first_party:
             tier = "lightweight"
 
-        # Summarize conversation
-        conversation_summary = await self._summarize_conversation(
-            assembled_ctx.conversation_turns[-6:], instruction,
-        )
+        # Summarize conversation (skip for skills that don't need it)
+        if manifest.needs_conversation_context:
+            conversation_summary = await self._summarize_conversation(
+                assembled_ctx.conversation_turns[-6:], instruction,
+            )
+        else:
+            conversation_summary = ""
 
         # Include the referenced assistant response only when the
         # instruction refers to prior content ("save this", "save the

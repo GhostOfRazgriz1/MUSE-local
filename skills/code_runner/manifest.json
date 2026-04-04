@@ -13,6 +13,7 @@
     "is_first_party": true,
     "supports_rollback": false,
     "idempotent": true,
+    "needs_conversation_context": false,
     "actions": [
         {"id": "calculate", "description": "Evaluate a math expression or solve a calculation from natural language"},
         {"id": "run", "description": "Execute provided Python code and return the output"}

@@ -57,6 +57,7 @@ class SkillManifest:
     is_first_party: bool = False
     supports_rollback: bool = False
     idempotent: bool = True
+    needs_conversation_context: bool = True
 
     @classmethod
     def from_json(cls, data: str | dict) -> SkillManifest:
