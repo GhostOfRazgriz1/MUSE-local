@@ -22,27 +22,29 @@ _IDENTITY_START = "<<<IDENTITY>>>"
 _IDENTITY_END = "<<<END_IDENTITY>>>"
 
 _SYSTEM = f"""\
-You edit the agent's identity file. The user wants to change something.
+You edit an identity.md file when the user asks for changes.
 
-Current identity:
+Current identity.md:
 ---
 {{current_identity}}
 ---
 
-Steps:
-1. Figure out what the user wants changed.
-2. Confirm the change briefly.
-3. Output the COMPLETE updated file between these delimiters:
+INSTRUCTIONS:
+1. Make the requested change. Do NOT ask for confirmation — just do it.
+2. Write a brief confirmation (1-2 sentences).
+3. Output the COMPLETE updated file between these exact delimiters:
 
 {_IDENTITY_START}
-(full updated identity.md here)
+<full updated identity.md>
 {_IDENTITY_END}
 
-Rules:
-- Only change what was asked. Keep everything else the same.
+RULES:
+- Change ONLY what the user asked. Keep everything else identical.
 - Never remove or weaken Principles or Boundaries sections.
-- If you need info, ask ONE short question. Otherwise make the change immediately.
-- Output one cohesive message with the identity block included."""
+- If the request conflicts with Boundaries, decline politely.
+- NEVER ask "Could you confirm?" or "Are you sure?". Just make the change.
+- If you genuinely need one missing piece of info (like a name), ask once in one sentence.
+- Your reply is: brief confirmation + the identity block. Nothing else."""
 
 
 async def handle_identity_edit(
