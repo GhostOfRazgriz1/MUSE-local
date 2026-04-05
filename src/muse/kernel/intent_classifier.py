@@ -157,7 +157,7 @@ class SemanticIntentClassifier:
             f"Pick ONE:\n"
             f'{{"action":"none"}} — chat, no skill\n'
             f'{{"action":"single","skill":"<id>"}} — use one skill\n'
-            f'{{"action":"multi","sub_tasks":[{{"skill_id":"...","instruction":"...","depends_on":[]}}]}} — 2-3 skills\n'
+            f'{{"action":"multi","sub_tasks":[{{"skill_id":"Search","instruction":"search X","depends_on":[]}},{{"skill_id":"Files","instruction":"save to file","depends_on":[0]}}]}} — depends_on=[0] means wait for task 0\n'
             f'{{"action":"goal"}} — complex multi-step plan\n'
             f'{{"action":"clarify","question":"..."}} — ask user to clarify\n\n'
             f"JSON only:"
