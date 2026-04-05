@@ -22,6 +22,13 @@ function ModelsTab() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [gallerySearch, setGallerySearch] = useState("");
   const [serverStatus, setServerStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [connRuntime, setConnRuntime] = useState("ollama");
+  const [connAddress, setConnAddress] = useState("localhost");
+  const [connPort, setConnPort] = useState("11434");
+  const [connEditing, setConnEditing] = useState(false);
+  const [connBusy, setConnBusy] = useState(false);
+  const [connError, setConnError] = useState("");
+  const [connSuccess, setConnSuccess] = useState(false);
 
   const fetchModels = useCallback(() => {
     apiFetch("/api/settings/models")
@@ -40,8 +47,9 @@ function ModelsTab() {
       apiFetch("/api/settings/models/overrides").then((r) => r.json()),
       apiFetch("/api/skills").then((r) => r.json()),
       apiFetch("/api/settings").then((r) => r.json()),
+      apiFetch("/api/settings/local").then((r) => r.json()).catch(() => ({})),
     ])
-      .then(([modelsRes, overridesRes, skillsRes, settingsRes]) => {
+      .then(([modelsRes, overridesRes, skillsRes, settingsRes, localRes]) => {
         const m = modelsRes.models || [];
         setModels(m);
         setServerStatus(m.length > 0 ? "online" : "offline");
@@ -49,6 +57,9 @@ function ModelsTab() {
         const skillsList = Array.isArray(skillsRes) ? skillsRes : skillsRes.skills || [];
         setSkills(skillsList);
         setDefaultModel(settingsRes.settings?.default_model || "");
+        if (localRes.runtime) setConnRuntime(localRes.runtime);
+        if (localRes.address) setConnAddress(localRes.address);
+        if (localRes.port) setConnPort(String(localRes.port));
       })
       .catch(() => setLoadError("Failed to load settings. Check your connection."))
       .finally(() => setLoading(false));
@@ -125,15 +136,17 @@ function ModelsTab() {
         <p>MUSE runs on local models via Ollama or vLLM. No API keys needed.</p>
       </div>
 
-      {/* Server status */}
+      {/* Local server connection */}
       <SettingsSection
         title="Local Server"
-        description="Your local LLM server status."
+        description="Your local LLM server connection."
       >
         <div className="provider-keys-list">
           <div className="provider-key-row">
             <div className="provider-key-info">
-              <span className="provider-key-name">Ollama / vLLM</span>
+              <span className="provider-key-name">
+                {connRuntime.charAt(0).toUpperCase() + connRuntime.slice(1)} — {connAddress}:{connPort}
+              </span>
               {serverStatus === "checking" && (
                 <span className="provider-key-badge badge-none">checking...</span>
               )}
@@ -143,15 +156,66 @@ function ModelsTab() {
                 </span>
               )}
               {serverStatus === "offline" && (
-                <span className="provider-key-badge badge-none">not detected</span>
+                <span className="provider-key-badge badge-none">not connected</span>
               )}
             </div>
             <div className="provider-key-actions">
-              <button className="btn btn-sm btn-ghost" onClick={fetchModels}>
-                Refresh
+              <button className="btn btn-sm btn-ghost" onClick={fetchModels}>Refresh</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setConnEditing(!connEditing)}>
+                {connEditing ? "Cancel" : "Configure"}
               </button>
             </div>
           </div>
+          {connEditing && (
+            <div className="custom-provider-form">
+              <div className="custom-provider-field">
+                <label className="custom-provider-label">Runtime</label>
+                <div className="settings-select-wrapper">
+                  <select className="settings-select" value={connRuntime} onChange={(e) => setConnRuntime(e.target.value)}>
+                    <option value="ollama">Ollama</option>
+                    <option value="vllm">vLLM</option>
+                    <option value="llamacpp">llama.cpp</option>
+                    <option value="other">Other (OpenAI-compatible)</option>
+                  </select>
+                  <IconChevronDown size={14} className="settings-select-icon" />
+                </div>
+              </div>
+              <div className="custom-provider-field">
+                <label className="custom-provider-label">Address</label>
+                <input className="settings-input" type="text" placeholder="localhost" value={connAddress}
+                  onChange={(e) => { setConnAddress(e.target.value); setConnError(""); }} />
+              </div>
+              <div className="custom-provider-field">
+                <label className="custom-provider-label">Port</label>
+                <input className="settings-input" type="text" placeholder="11434" value={connPort}
+                  onChange={(e) => { setConnPort(e.target.value); setConnError(""); }} />
+              </div>
+              {connError && <span className="provider-key-error"><IconAlertCircle size={12} /> {connError}</span>}
+              {connSuccess && <span className="provider-key-error" style={{ color: "var(--success)" }}><IconCheck size={12} /> Connection saved and models refreshed.</span>}
+              <div className="custom-provider-actions">
+                <button className="btn btn-sm btn-primary" disabled={connBusy || !connAddress.trim()} onClick={async () => {
+                  setConnBusy(true); setConnError(""); setConnSuccess(false);
+                  try {
+                    const testRes = await apiFetch("/api/settings/local/test", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ address: connAddress.trim(), port: parseInt(connPort) || 11434 }),
+                    });
+                    const testData = await testRes.json();
+                    if (!testRes.ok || testData.error) { setConnError(testData.error || testData.detail || "Connection failed"); setConnBusy(false); return; }
+                    const saveRes = await apiFetch("/api/settings/local", {
+                      method: "PUT", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ runtime: connRuntime, address: connAddress.trim(), port: parseInt(connPort) || 11434, models: (testData.models || []).map((m: { id: string }) => m.id), max_workers: 2 }),
+                    });
+                    if (!saveRes.ok) { const d = await saveRes.json().catch(() => ({})); setConnError(d.detail || "Failed to save"); setConnBusy(false); return; }
+                    setConnSuccess(true); fetchModels();
+                    setTimeout(() => { setConnEditing(false); setConnSuccess(false); }, 1500);
+                  } catch { setConnError("Could not reach the server. Check address and port."); }
+                  setConnBusy(false);
+                }}>{connBusy ? "Testing..." : "Test & Save"}</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => { setConnEditing(false); setConnError(""); }}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       </SettingsSection>
 
