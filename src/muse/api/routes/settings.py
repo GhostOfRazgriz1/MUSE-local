@@ -7,9 +7,9 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from muse.api.app import get_orchestrator, get_service
+from muse.api.app import get_service, require_orchestrator
 from muse.config import BUILTIN_PROVIDERS
 
 logger = logging.getLogger(__name__)
@@ -54,11 +54,8 @@ def _is_allowed_key(key: str) -> bool:
 
 
 @router.get("")
-async def get_settings():
+async def get_settings(orchestrator=Depends(require_orchestrator)):
     """Get all user settings."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"settings": {}}
 
     async with get_service("db").execute("SELECT key, value FROM user_settings") as cursor:
         rows = await cursor.fetchall()
@@ -78,11 +75,8 @@ _DEFAULT_PORTS = {
 
 
 @router.get("/local")
-async def get_local_config():
+async def get_local_config(orchestrator=Depends(require_orchestrator)):
     """Return the stored local server configuration."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"config": None}
 
     try:
         async with get_service("db").execute(
@@ -97,15 +91,12 @@ async def get_local_config():
 
 
 @router.put("/local")
-async def set_local_config(body: dict):
+async def set_local_config(body: dict, orchestrator=Depends(require_orchestrator)):
     """Save local server configuration and hot-reload the provider.
 
     Body: ``{"runtime": "ollama", "address": "localhost", "port": 11434,
              "models": ["llama3.2", "gemma2"], "max_workers": 2}``
     """
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        raise HTTPException(503, "Not ready")
 
     runtime = body.get("runtime", "ollama")
     address = body.get("address", "localhost").strip()
@@ -203,11 +194,8 @@ async def test_local_connection(body: dict):
 # ------------------------------------------------------------------
 
 @router.put("/{key}")
-async def set_setting(key: str, body: dict):
+async def set_setting(key: str, body: dict, orchestrator=Depends(require_orchestrator)):
     """Set a user setting (restricted to whitelisted keys)."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"error": "Not ready"}
 
     if not _is_allowed_key(key):
         raise HTTPException(400, f"Setting key not allowed: {key}")
@@ -245,11 +233,8 @@ async def set_setting(key: str, body: dict):
 
 
 @router.get("/models")
-async def list_models():
+async def list_models(orchestrator=Depends(require_orchestrator)):
     """List available LLM models from the provider."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"models": []}
 
     try:
         models = await get_service("provider").list_models()
@@ -271,29 +256,22 @@ async def list_models():
 
 
 @router.get("/models/overrides")
-async def get_model_overrides():
+async def get_model_overrides(orchestrator=Depends(require_orchestrator)):
     """Get per-skill model overrides."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"overrides": {}}
     return {"overrides": await get_service("model_router").get_skill_overrides()}
 
 
 @router.put("/models/overrides/{skill_id}")
-async def set_model_override(skill_id: str, body: dict):
+async def set_model_override(skill_id: str, body: dict, orchestrator=Depends(require_orchestrator)):
     """Set a model override for a skill."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"error": "Not ready"}
     await get_service("model_router").set_skill_override(skill_id, body["model_id"])
     return {"skill_id": skill_id, "model_id": body["model_id"]}
 
 
 @router.get("/providers")
-async def list_providers():
+async def list_providers(orchestrator=Depends(require_orchestrator)):
     """Return LLM providers and their status."""
-    orchestrator = get_orchestrator()
-    registered = set(get_service("provider").providers.keys()) if orchestrator else set()
+    registered = set(get_service("provider").providers.keys())
 
     providers = []
     for prefix, pdef in BUILTIN_PROVIDERS.items():
@@ -313,20 +291,14 @@ async def list_providers():
 # ------------------------------------------------------------------
 
 @router.get("/credentials")
-async def list_credentials():
+async def list_credentials(orchestrator=Depends(require_orchestrator)):
     """List stored credentials (metadata only, no secrets)."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"credentials": []}
     return {"credentials": await get_service("vault").list_credentials()}
 
 
 @router.post("/credentials")
-async def store_credential(body: dict):
+async def store_credential(body: dict, orchestrator=Depends(require_orchestrator)):
     """Store a new credential."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"error": "Not ready"}
     await get_service("vault").store(
         credential_id=body["id"],
         secret=body["secret"],
@@ -343,11 +315,8 @@ async def store_credential(body: dict):
 
 
 @router.delete("/credentials/{credential_id}")
-async def delete_credential(credential_id: str):
+async def delete_credential(credential_id: str, orchestrator=Depends(require_orchestrator)):
     """Delete a credential."""
-    orchestrator = get_orchestrator()
-    if not orchestrator:
-        return {"error": "Not ready"}
     await get_service("vault").delete(credential_id)
     # Re-evaluate skill routing without the removed credential
     try:
