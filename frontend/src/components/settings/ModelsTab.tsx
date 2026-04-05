@@ -29,6 +29,7 @@ function ModelsTab() {
   const [connBusy, setConnBusy] = useState(false);
   const [connError, setConnError] = useState("");
   const [connSuccess, setConnSuccess] = useState(false);
+  const [maxWorkers, setMaxWorkers] = useState(2);
 
   const fetchModels = useCallback(() => {
     apiFetch("/api/settings/models")
@@ -60,6 +61,7 @@ function ModelsTab() {
         if (localRes.runtime) setConnRuntime(localRes.runtime);
         if (localRes.address) setConnAddress(localRes.address);
         if (localRes.port) setConnPort(String(localRes.port));
+        if (localRes.max_workers) setMaxWorkers(localRes.max_workers);
       })
       .catch(() => setLoadError("Failed to load settings. Check your connection."))
       .finally(() => setLoading(false));
@@ -204,7 +206,7 @@ function ModelsTab() {
                     if (!testRes.ok || testData.error) { setConnError(testData.error || testData.detail || "Connection failed"); setConnBusy(false); return; }
                     const saveRes = await apiFetch("/api/settings/local", {
                       method: "PUT", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ runtime: connRuntime, address: connAddress.trim(), port: parseInt(connPort) || 11434, models: (testData.models || []).map((m: { id: string }) => m.id), max_workers: 2 }),
+                      body: JSON.stringify({ runtime: connRuntime, address: connAddress.trim(), port: parseInt(connPort) || 11434, models: (testData.models || []).map((m: { id: string }) => m.id), max_workers: maxWorkers }),
                     });
                     if (!saveRes.ok) { const d = await saveRes.json().catch(() => ({})); setConnError(d.detail || "Failed to save"); setConnBusy(false); return; }
                     setConnSuccess(true); fetchModels();
@@ -216,6 +218,35 @@ function ModelsTab() {
               </div>
             </div>
           )}
+        </div>
+        <div className="settings-field" style={{ marginTop: 12 }}>
+          <label className="settings-label">Max Concurrent Tasks</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              className="settings-input"
+              type="number"
+              min={1}
+              max={16}
+              value={maxWorkers}
+              style={{ width: 80 }}
+              onChange={(e) => {
+                const v = Math.max(1, Math.min(16, parseInt(e.target.value) || 1));
+                setMaxWorkers(v);
+              }}
+              onBlur={async () => {
+                try {
+                  await apiFetch("/api/settings/local", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ runtime: connRuntime, address: connAddress.trim(), port: parseInt(connPort) || 11434, models: models.map((m) => m.id), max_workers: maxWorkers }),
+                  });
+                } catch {}
+              }}
+            />
+          </div>
+          <div className="settings-hint">
+            How many skills can run in parallel. Lower values are more reliable on smaller models. Default: 2.
+          </div>
         </div>
       </SettingsSection>
 
