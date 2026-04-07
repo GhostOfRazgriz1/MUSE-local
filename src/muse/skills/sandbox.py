@@ -11,12 +11,36 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import secrets as _secrets
+
 from muse.debug import get_tracer
 from muse.skills.manifest import SkillManifest
 from muse.skills.warm_pool import WarmPool
 
 # Skill IDs must be alphanumeric + hyphens/underscores (no path separators)
 _SAFE_SKILL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _-]*$")
+
+# Entry points must be a simple filename (no directory separators or traversal)
+_SAFE_ENTRY_POINT = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_ -]*\.py$")
+
+
+def _validate_entry_point(skill_dir: Path, entry_point: str) -> Path:
+    """Validate that *entry_point* stays within *skill_dir*.
+
+    Raises ``ValueError`` if the entry_point contains path traversal
+    sequences, directory separators, or resolves outside the skill
+    directory.
+    """
+    if not _SAFE_ENTRY_POINT.match(entry_point):
+        raise ValueError(
+            f"Invalid entry_point '{entry_point}' — must be a simple .py filename"
+        )
+    resolved = (skill_dir / entry_point).resolve()
+    if not resolved.is_relative_to(skill_dir.resolve()):
+        raise ValueError(
+            f"entry_point '{entry_point}' escapes the skill directory"
+        )
+    return resolved
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +146,8 @@ class SkillSandbox:
         self._running[task_id] = (asyncio.current_task(), None)  # type: ignore[arg-type]
 
         skill_dir = self._skills_dir / skill_id
-        entry = manifest.entry_point.replace(".py", "").replace("/", ".")
-        module_path = skill_dir / manifest.entry_point
+        module_path = _validate_entry_point(skill_dir, manifest.entry_point)
+        entry = manifest.entry_point.replace(".py", "")
 
         logger.info("Running skill %s in-process (task %s)", skill_id, task_id)
         _t = get_tracer()
@@ -246,11 +270,20 @@ class SkillSandbox:
         pooled_process = None
         process: asyncio.subprocess.Process | None = None
 
+        skill_dir = self._skills_dir / skill_id
+        _validate_entry_point(skill_dir, manifest.entry_point)
+
+        # Generate a one-time IPC authentication token. Passed to the
+        # subprocess via stdin (trusted channel). When the IPC server is
+        # built, the subprocess must present this token on first message.
+        ipc_token = _secrets.token_urlsafe(32)
+
         payload = json.dumps({
             "task_id": task_id,
             "skill_id": skill_id,
-            "skill_dir": str(self._skills_dir / skill_id),
+            "skill_dir": str(skill_dir),
             "entry_point": manifest.entry_point,
+            "ipc_token": ipc_token,
             "brief": brief,
             "permissions": permissions,
             "config": config,

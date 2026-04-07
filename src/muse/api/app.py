@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from muse.api.auth import init_auth, require_token
 from muse.config import Config
@@ -106,6 +108,18 @@ def create_app(orchestrator=None) -> FastAPI:
         lifespan=lifespan if not orchestrator else None,
     )
 
+    # Security headers middleware — added first so it wraps all responses
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response: StarletteResponse = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+            response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -200,7 +214,7 @@ def create_app(orchestrator=None) -> FastAPI:
                 raise HTTPException(404, "Not found")
             file_path = (frontend_dist / path).resolve()
             # Block path traversal — resolved path must stay inside frontend_dist
-            if not str(file_path).startswith(str(_frontend_root)):
+            if not file_path.is_relative_to(_frontend_root):
                 raise HTTPException(404, "Not found")
             if file_path.is_file():
                 return _FileResponse(str(file_path))
