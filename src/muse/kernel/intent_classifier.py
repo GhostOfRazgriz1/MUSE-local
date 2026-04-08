@@ -36,6 +36,8 @@ class SubTask:
     instruction: str
     action: str | None = None
     depends_on: list[int] = field(default_factory=list)
+    iteration_group: str | None = None   # group name, e.g. "code_test"
+    iteration_role: str | None = None    # "work" | "verify"
 
 
 @dataclass
@@ -174,6 +176,8 @@ class SemanticIntentClassifier:
                     "- Chat/conversation → {{\"action\":\"none\"}}\n"
                     "- Creating files/documents/code → use Files skill\n"
                     "- Running code/math → use Code Runner skill\n"
+                    "- The user may write in ANY language. Match intent to skills "
+                    "regardless of language.\n"
                     "- Unsure → {{\"action\":\"none\"}}\n"
                     "- No markdown, no explanation, ONLY JSON."
                 ),
